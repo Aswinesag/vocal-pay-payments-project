@@ -1,0 +1,74 @@
+# ==========================================
+# Python Specific Rules
+# ==========================================
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebooks cache
+.ipynb_checkpoints
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing and Coverage
+.pytest_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.pyre/
+.physa_cache/
+
+# ==========================================
+# Future-Proofing: Databases (Uncomment when chosen)
+# ==========================================
+# SQLite (Very common for early-stage Python development)
+*.sqlite
+*.sqlite3
+*.db
+
+# PostgreSQL / MySQL (Uncomment if you use local file dumps)
+# *.sql
+# *.dump
+
+# ==========================================
+# Operating System & IDEs (Global)
+# ==========================================
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.code-workspace
+*.log
