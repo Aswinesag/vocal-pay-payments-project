@@ -15,8 +15,8 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
-    LargeBinary,
     String,
     Text,
 )
@@ -98,6 +98,29 @@ class User(
     """
 
     __tablename__ = "users"
+
+    # ------------------------------------------------------
+    # Relationships
+    # ------------------------------------------------------
+
+    pending_transactions: Mapped[list["PendingTransaction"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    transactions: Mapped[list["Transaction"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    fraud_events: Mapped[list["FraudEvent"]] = relationship(
+        back_populates="user",
+        cascade="all, delete-orphan",
+    )
+
+    audit_logs: Mapped[list["AuditLog"]] = relationship(
+        back_populates="user",
+    )
 
     # ------------------------------------------------------
     # Identity
@@ -195,7 +218,11 @@ class PendingTransaction(
     """
 
     __tablename__ = "pending_transactions"
-
+    __table_args__ = (
+        Index("idx_pending_status", "status"),
+        Index("idx_pending_expires", "expires_at"),
+    )
+    
     # ------------------------------------------------------
     # User Information
     # ------------------------------------------------------
@@ -265,6 +292,14 @@ class PendingTransaction(
         nullable=False,
     )
 
+    # ------------------------------------------------------
+    # Relationships
+    # ------------------------------------------------------
+
+    user: Mapped["User"] = relationship(
+        back_populates="pending_transactions"
+    )
+
 # ==========================================================
 # Transaction Model
 # ==========================================================
@@ -280,6 +315,10 @@ class Transaction(
     """
 
     __tablename__ = "transactions"
+    __table_args__ = (
+        Index("idx_transaction_status", "status"),
+        Index("idx_transaction_risk", "risk_level"),
+    )
 
     # ------------------------------------------------------
     # User Information
@@ -359,6 +398,14 @@ class Transaction(
         nullable=False,
     )
 
+    # ------------------------------------------------------
+    # Relationships
+    # ------------------------------------------------------
+
+    user: Mapped["User"] = relationship(
+        back_populates="transactions"
+    )
+
 # ==========================================================
 # Fraud Event Model
 # ==========================================================
@@ -374,6 +421,10 @@ class FraudEvent(
     """
 
     __tablename__ = "fraud_events"
+    __table_args__ = (
+        Index("idx_fraud_event", "event_type"),
+        Index("idx_fraud_risk", "risk_level"),
+    )
 
     # ------------------------------------------------------
     # User Information
@@ -440,6 +491,14 @@ class FraudEvent(
         nullable=False,
     )
 
+    # ------------------------------------------------------
+    # Relationships
+    # ------------------------------------------------------
+
+    user: Mapped["User"] = relationship(
+        back_populates="fraud_events"
+    )
+
 # ==========================================================
 # Audit Log Model
 # ==========================================================
@@ -455,6 +514,10 @@ class AuditLog(
     """
 
     __tablename__ = "audit_logs"
+    __table_args__ = (
+        Index("idx_audit_event", "event_type"),
+        Index("idx_audit_status", "status"),
+    )
 
     # ------------------------------------------------------
     # Request Context
@@ -513,4 +576,8 @@ class AuditLog(
     processing_time_ms: Mapped[float | None] = mapped_column(
         Float,
         nullable=True,
+    )
+
+    user: Mapped["User | None"] = relationship(
+        back_populates="audit_logs"
     )

@@ -79,3 +79,30 @@ print(AuditLog.__tablename__)
 print()
 
 print(list(Base.metadata.tables.keys()))
+
+from app.database.database import Base
+
+print()
+print("========== ALL TABLES ==========")
+
+for table in Base.metadata.sorted_tables:
+    print(table.name)
+
+print()
+
+print("Total Tables:", len(Base.metadata.tables))
+
+from app.database.models import User
+
+print()
+print("========== USER RELATIONSHIPS ==========")
+
+print(User.pending_transactions.property)
+print(User.transactions.property)
+print(User.fraud_events.property)
+print(User.audit_logs.property)
+
+from app.database.models import User
+
+print(hasattr(User, "pending_transactions"))
+print(dir(User))
