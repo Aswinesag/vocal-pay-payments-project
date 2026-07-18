@@ -121,6 +121,7 @@ class Settings(BaseSettings):
     # ------------------------------------------------------
 
     DATABASE_URL: str = Field(...)
+    SQL_ECHO: bool = Field(default=False)
 
     # ------------------------------------------------------
     # Logging
