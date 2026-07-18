@@ -178,3 +178,89 @@ class User(
         DateTime(timezone=True),
         nullable=True,
     )
+
+# ==========================================================
+# Pending Transaction Model
+# ==========================================================
+
+class PendingTransaction(
+    Base,
+    PrimaryKeyMixin,
+    TransactionIDMixin,
+    TimestampMixin,
+):
+    """
+    Stores temporary transactions awaiting
+    OTP or challenge verification.
+    """
+
+    __tablename__ = "pending_transactions"
+
+    # ------------------------------------------------------
+    # User Information
+    # ------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
+
+    amount: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Risk Evaluation
+    # ------------------------------------------------------
+
+    risk_level: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Verification
+    # ------------------------------------------------------
+
+    verification_secret: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # AI Decision
+    # ------------------------------------------------------
+
+    speaker_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    face_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    fraud_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    replay_attack: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )

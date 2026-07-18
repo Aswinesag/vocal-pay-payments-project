@@ -31,3 +31,15 @@ print()
 print("========== REGISTERED TABLES ==========")
 
 print(list(Base.metadata.tables.keys()))
+
+from app.database.models import PendingTransaction
+from app.database.database import Base
+
+print()
+print("========== PENDING TRANSACTION ==========")
+
+print(PendingTransaction.__tablename__)
+
+print()
+
+print(Base.metadata.tables.keys())
