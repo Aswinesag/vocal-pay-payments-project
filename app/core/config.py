@@ -1,28 +1,62 @@
 """
-Application Configuration Module
+app/core/config.py
 
-This module centralizes all application configuration using
-Pydantic Settings. Every configurable value in the project
-must originate from this file.
+Central configuration management for the Secure Voice
+Transaction System.
+
+Loads all runtime configuration from the .env file.
 
 Project:
 A Secure Voice-based Financial Transaction System Using
-Multimodal Biometrics and Agentic AI Fraud Detection.
-
-Author: Aswin Kumar
+Multimodal Biometrics and Agentic AI Fraud Detection
 """
 
-from functools import lru_cache
-from pathlib import Path
-from typing import Literal
+from __future__ import annotations
 
-from pydantic import Field, field_validator
+from pathlib import Path
+from typing import List
+
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+# ==========================================================
+# Project Paths
+# ==========================================================
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+APP_DIR = BASE_DIR / "app"
+
+DATABASE_DIR = BASE_DIR / "database"
+
+LOG_DIR = BASE_DIR / "logs"
+
+MODEL_DIR = BASE_DIR / "models"
+
+UPLOAD_DIR = BASE_DIR / "uploads"
+
+
+# ==========================================================
+# Create Required Directories
+# ==========================================================
+
+DATABASE_DIR.mkdir(parents=True, exist_ok=True)
+
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ==========================================================
+# Application Settings
+# ==========================================================
+
 class Settings(BaseSettings):
     """
-    Global application settings.
+    Centralized application configuration.
 
     Values are automatically loaded from the .env file.
     """
@@ -31,251 +65,287 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         case_sensitive=True,
-        extra="ignore"
+        extra="ignore",
     )
 
-    # ==========================================================
+    # ------------------------------------------------------
     # Application
-    # ==========================================================
+    # ------------------------------------------------------
 
-    APP_NAME: str
-    APP_VERSION: str
+    APP_NAME: str = Field(...)
 
-    ENVIRONMENT: Literal[
-        "development",
-        "testing",
-        "production"
-    ]
+    APP_VERSION: str = Field(...)
 
-    DEBUG: bool
+    ENVIRONMENT: str = Field(...)
 
-    # ==========================================================
-    # Server
-    # ==========================================================
+    DEBUG: bool = Field(default=False)
 
-    HOST: str
-    PORT: int
+    # ------------------------------------------------------
+    # API Server
+    # ------------------------------------------------------
 
-    API_V1_PREFIX: str
+    HOST: str = Field(...)
 
-    # ==========================================================
-    # Logging
-    # ==========================================================
+    PORT: int = Field(...)
 
-    LOG_LEVEL: str
+    API_PREFIX: str = Field(...)
 
-    LOG_DIRECTORY: Path
-
-    LOG_RETENTION: str
-
-    LOG_ROTATION: str
-
-    # ==========================================================
-    # Audio
-    # ==========================================================
-
-    SUPPORTED_AUDIO_FORMATS: str
-
-    TARGET_SAMPLE_RATE: int
-
-    TARGET_CHANNELS: int
-
-    MIN_AUDIO_DURATION: int
-
-    MAX_AUDIO_DURATION: int
-
-    MAX_AUDIO_SIZE_MB: int
-
-    # ==========================================================
-    # Whisper
-    # ==========================================================
-
-    WHISPER_MODEL: str
-
-    WHISPER_DEVICE: str
-
-    WHISPER_COMPUTE_TYPE: str
-
-    # ==========================================================
-    # Voice Activity Detection
-    # ==========================================================
-
-    VAD_THRESHOLD: float
-
-    MIN_SPEECH_DURATION_MS: int
-
-    # ==========================================================
-    # Speaker Verification
-    # ==========================================================
-
-    SPEAKER_THRESHOLD: float
-
-    # ==========================================================
-    # Face Recognition
-    # ==========================================================
-
-    FACE_MATCH_THRESHOLD: float
-
-    # ==========================================================
-    # Liveness
-    # ==========================================================
-
-    LIVENESS_THRESHOLD: float
-
-    # ==========================================================
-    # Fraud Detection
-    # ==========================================================
-
-    LOW_RISK_THRESHOLD: float
-
-    MEDIUM_RISK_THRESHOLD: float
-
-    HIGH_RISK_THRESHOLD: float
-
-    # ==========================================================
+    # ------------------------------------------------------
     # Security
-    # ==========================================================
+    # ------------------------------------------------------
 
-    JWT_SECRET_KEY: str
+    SECRET_KEY: str = Field(...)
 
-    JWT_ALGORITHM: str
+    JWT_ALGORITHM: str = Field(...)
 
-    JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(...)
 
-    # ==========================================================
+    # ------------------------------------------------------
+    # Project Directories
+    # ------------------------------------------------------
+
+    BASE_DIR: Path = BASE_DIR
+
+    APP_DIR: Path = APP_DIR
+
+    DATABASE_DIR: Path = DATABASE_DIR
+
+    LOG_DIR: Path = LOG_DIR
+
+    MODEL_DIR: Path = MODEL_DIR
+
+    UPLOAD_DIR: Path = UPLOAD_DIR
+
+        # ------------------------------------------------------
     # Database
-    # ==========================================================
+    # ------------------------------------------------------
 
-    DATABASE_URL: str
+    DATABASE_URL: str = Field(...)
 
-    # ==========================================================
-    # Models
-    # ==========================================================
+    # ------------------------------------------------------
+    # Logging
+    # ------------------------------------------------------
 
-    MODEL_DIRECTORY: Path
+    LOG_LEVEL: str = Field(...)
 
-    # ==========================================================
-    # Validators
-    # ==========================================================
+    LOG_DIRECTORY: str = Field(...)
 
-    @field_validator("PORT")
-    @classmethod
-    def validate_port(cls, value: int) -> int:
-        if not (1024 <= value <= 65535):
-            raise ValueError(
-                "PORT must be between 1024 and 65535."
-            )
-        return value
+    AUDIT_LOG_ENABLED: bool = Field(default=True)
 
-    @field_validator("MAX_AUDIO_DURATION")
-    @classmethod
-    def validate_audio_duration(cls, value: int) -> int:
-        if value <= 0:
-            raise ValueError(
-                "MAX_AUDIO_DURATION must be greater than zero."
-            )
-        return value
+    # ------------------------------------------------------
+    # Upload Directories
+    # ------------------------------------------------------
 
-    @field_validator("TARGET_SAMPLE_RATE")
-    @classmethod
-    def validate_sample_rate(cls, value: int) -> int:
-        supported = [
-            8000,
-            16000,
-            22050,
-            44100,
-            48000
-        ]
+    UPLOAD_DIRECTORY: str = Field(...)
 
-        if value not in supported:
-            raise ValueError(
-                f"Unsupported sample rate: {value}"
-            )
+    MODEL_DIRECTORY: str = Field(...)
 
-        return value
+    # ------------------------------------------------------
+    # Audio Configuration
+    # ------------------------------------------------------
 
-    @field_validator("LOG_LEVEL")
-    @classmethod
-    def validate_log_level(cls, value: str) -> str:
+    MAX_AUDIO_DURATION: int = Field(...)
 
-        allowed = {
-            "DEBUG",
-            "INFO",
-            "WARNING",
-            "ERROR",
-            "CRITICAL"
-        }
+    MAX_AUDIO_SIZE_MB: int = Field(...)
 
-        upper = value.upper()
+    ALLOWED_AUDIO_FORMATS: str = Field(...)
 
-        if upper not in allowed:
-            raise ValueError(
-                f"Invalid LOG_LEVEL: {value}"
-            )
+    # ------------------------------------------------------
+    # Image Configuration
+    # ------------------------------------------------------
 
-        return upper
+    MAX_IMAGE_SIZE_MB: int = Field(...)
 
-    @field_validator("WHISPER_DEVICE")
-    @classmethod
-    def validate_device(cls, value: str) -> str:
+    ALLOWED_IMAGE_FORMATS: str = Field(...)
 
-        allowed = {
-            "cpu",
-            "cuda",
-            "auto"
-        }
+    # ------------------------------------------------------
+    # API / CORS
+    # ------------------------------------------------------
 
-        lower = value.lower()
+    ALLOWED_ORIGINS: str = Field(...)
 
-        if lower not in allowed:
-            raise ValueError(
-                "WHISPER_DEVICE must be cpu, cuda or auto."
-            )
+    # ------------------------------------------------------
+    # Performance
+    # ------------------------------------------------------
 
-        return lower
+    MAX_WORKERS: int = Field(...)
+
+    REQUEST_TIMEOUT_SECONDS: int = Field(...)
+
+        # ------------------------------------------------------
+    # Faster-Whisper Configuration
+    # ------------------------------------------------------
+
+    WHISPER_MODEL: str = Field(...)
+
+    WHISPER_DEVICE: str = Field(...)
+
+    WHISPER_COMPUTE_TYPE: str = Field(...)
+
+    WHISPER_BEAM_SIZE: int = Field(...)
+
+    WHISPER_LANGUAGE: str = Field(...)
+
+    # ------------------------------------------------------
+    # Speaker Verification
+    # ------------------------------------------------------
+
+    SPEAKER_DEVICE: str = Field(...)
+
+    SPEAKER_SIMILARITY_THRESHOLD: float = Field(...)
+
+    # ======================================================
+    # SpeechBrain ECAPA-TDNN
+    # ======================================================
+
+    SPEAKER_MODEL: str = Field(...)
+
+    # ------------------------------------------------------
+    # Face Recognition
+    # ------------------------------------------------------
+
+    INSIGHTFACE_DEVICE: str = Field(...)
+
+    FACE_SIMILARITY_THRESHOLD: float = Field(...)
+
+    FACE_MODEL_NAME: str = Field(...)
+
+    FACE_PROVIDER: str = Field(...)
+
+    FACE_DET_WIDTH: int = Field(...)
+
+    FACE_DET_HEIGHT: int = Field(...)
+
+    # ------------------------------------------------------
+    # Face Liveness Detection
+    # ------------------------------------------------------
+
+    LIVENESS_DEVICE: str = Field(...)
+
+    LIVENESS_MODEL_PATH: str = Field(...)
+
+    LIVENESS_THRESHOLD: float = Field(...)
+
+    # ------------------------------------------------------
+    # DSP Replay Gatekeeper
+    # ------------------------------------------------------
+
+    ENABLE_DSP_GATEKEEPER: bool = Field(...)
+
+    SPECTRAL_ROLLOFF_THRESHOLD: float = Field(...)
+
+    SPECTRAL_CENTROID_THRESHOLD: float = Field(...)
+
+    # ------------------------------------------------------
+    # Risk Engine
+    # ------------------------------------------------------
+
+    LOW_RISK_MAX: float = Field(...)
+
+    MEDIUM_RISK_MAX: float = Field(...)
+
+    HIGH_RISK_MAX: float = Field(...)
+
+    OTP_LENGTH: int = Field(...)
+
+    OTP_EXPIRY_MINUTES: int = Field(...)
+
+    CHALLENGE_EXPIRY_MINUTES: int = Field(...)
+
+    # ------------------------------------------------------
+    # Ollama
+    # ------------------------------------------------------
+
+    OLLAMA_ENABLED: bool = Field(...)
+
+    OLLAMA_HOST: str = Field(...)
+
+    OLLAMA_MODEL: str = Field(...)
+
+    OLLAMA_TIMEOUT_SECONDS: int = Field(...)
+
+    # ------------------------------------------------------
+    # Transaction Policy
+    # ------------------------------------------------------
+
+    DEFAULT_CURRENCY: str = Field(...)
+
+    MAX_TRANSACTION_AMOUNT: float = Field(...)
+
+    # ------------------------------------------------------
+    # Convenience Properties
+    # ------------------------------------------------------
 
     @property
-    def audio_formats(self) -> list[str]:
+    def allowed_audio_formats(self) -> List[str]:
         """
-        Returns supported audio extensions.
-
-        Example:
-            ['.wav', '.mp3', '.m4a']
+        Returns supported audio formats as a list.
         """
         return [
-            ext.strip().lower()
-            for ext in self.SUPPORTED_AUDIO_FORMATS.split(",")
+            fmt.strip().lower()
+            for fmt in self.ALLOWED_AUDIO_FORMATS.split(",")
+            if fmt.strip()
         ]
 
     @property
-    def is_production(self) -> bool:
-        return self.ENVIRONMENT == "production"
+    def allowed_image_formats(self) -> List[str]:
+        """
+        Returns supported image formats as a list.
+        """
+        return [
+            fmt.strip().lower()
+            for fmt in self.ALLOWED_IMAGE_FORMATS.split(",")
+            if fmt.strip()
+        ]
 
     @property
-    def is_development(self) -> bool:
-        return self.ENVIRONMENT == "development"
+    def allowed_origins(self) -> List[str]:
+        """
+        Returns allowed CORS origins.
+        """
+        return [
+            origin.strip()
+            for origin in self.ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
+    @property
+    def database_path(self) -> Path:
+        """
+        Returns SQLite database file path.
+        """
+        return DATABASE_DIR / "vocalpay.db"
 
-@lru_cache(maxsize=1)
-def get_settings() -> Settings:
-    """
-    Returns a singleton Settings instance.
+    @property
+    def application_log_path(self) -> Path:
+        """
+        Returns application log path.
+        """
+        return LOG_DIR / "application.log"
 
-    Prevents repeatedly reading the .env file.
-    """
-    settings = Settings()
+    @property
+    def audit_log_path(self) -> Path:
+        """
+        Returns audit log path.
+        """
+        return LOG_DIR / "audit.log"
 
-    settings.LOG_DIRECTORY.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    @property
+    def upload_path(self) -> Path:
+        """
+        Upload directory.
+        """
+        return UPLOAD_DIR
 
-    settings.MODEL_DIRECTORY.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    @property
+    def model_path(self) -> Path:
+        """
+        AI model directory.
+        """
+        return MODEL_DIR
 
-    return settings
+# ==========================================================
+# Global Settings Instance
+# ==========================================================
 
-
-settings = get_settings()
+settings = Settings()
