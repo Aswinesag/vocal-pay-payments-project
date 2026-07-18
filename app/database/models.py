@@ -439,3 +439,78 @@ class FraudEvent(
         default=False,
         nullable=False,
     )
+
+# ==========================================================
+# Audit Log Model
+# ==========================================================
+
+class AuditLog(
+    Base,
+    PrimaryKeyMixin,
+    TransactionIDMixin,
+    TimestampMixin,
+):
+    """
+    Stores application audit events.
+    """
+
+    __tablename__ = "audit_logs"
+
+    # ------------------------------------------------------
+    # Request Context
+    # ------------------------------------------------------
+
+    user_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id"),
+        nullable=True,
+        index=True,
+    )
+
+    endpoint: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+    )
+
+    method: Mapped[str] = mapped_column(
+        String(10),
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Audit Details
+    # ------------------------------------------------------
+
+    event_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    message: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Request Metadata
+    # ------------------------------------------------------
+
+    client_ip: Mapped[str | None] = mapped_column(
+        String(64),
+        nullable=True,
+    )
+
+    user_agent: Mapped[str | None] = mapped_column(
+        Text,
+        nullable=True,
+    )
+
+    processing_time_ms: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )

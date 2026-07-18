@@ -67,3 +67,15 @@ print(FraudEvent.__tablename__)
 print()
 
 print(list(Base.metadata.tables.keys()))
+
+from app.database.models import AuditLog
+from app.database.database import Base
+
+print()
+print("========== AUDIT LOG MODEL ==========")
+
+print(AuditLog.__tablename__)
+
+print()
+
+print(list(Base.metadata.tables.keys()))
