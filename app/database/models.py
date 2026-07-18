@@ -264,3 +264,97 @@ class PendingTransaction(
         default=False,
         nullable=False,
     )
+
+# ==========================================================
+# Transaction Model
+# ==========================================================
+
+class Transaction(
+    Base,
+    PrimaryKeyMixin,
+    TransactionIDMixin,
+    TimestampMixin,
+):
+    """
+    Permanent transaction ledger.
+    """
+
+    __tablename__ = "transactions"
+
+    # ------------------------------------------------------
+    # User Information
+    # ------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
+
+    amount: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Transaction Result
+    # ------------------------------------------------------
+
+    status: Mapped[str] = mapped_column(
+        String(30),
+        nullable=False,
+    )
+
+    risk_level: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    success: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Biometric Scores
+    # ------------------------------------------------------
+
+    speaker_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    face_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    fraud_score: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Explainable AI
+    # ------------------------------------------------------
+
+    xai_reason: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Processing Metadata
+    # ------------------------------------------------------
+
+    processing_time_ms: Mapped[float] = mapped_column(
+        Float,
+        nullable=False,
+    )
+
+    replay_attack: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )

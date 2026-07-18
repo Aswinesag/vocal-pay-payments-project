@@ -43,3 +43,15 @@ print(PendingTransaction.__tablename__)
 print()
 
 print(Base.metadata.tables.keys())
+
+from app.database.models import Transaction
+from app.database.database import Base
+
+print()
+print("========== TRANSACTION MODEL ==========")
+
+print(Transaction.__tablename__)
+
+print()
+
+print(list(Base.metadata.tables.keys()))
