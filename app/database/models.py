@@ -83,3 +83,98 @@ class TransactionIDMixin:
         index=True,
         nullable=False,
     )
+
+# ==========================================================
+# User Model
+# ==========================================================
+
+class User(
+    Base,
+    PrimaryKeyMixin,
+    TimestampMixin,
+):
+    """
+    Registered VocalPay user.
+    """
+
+    __tablename__ = "users"
+
+    # ------------------------------------------------------
+    # Identity
+    # ------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    full_name: Mapped[str] = mapped_column(
+        String(120),
+        nullable=False,
+    )
+
+    email: Mapped[str] = mapped_column(
+        String(255),
+        unique=True,
+        index=True,
+        nullable=False,
+    )
+
+    phone_number: Mapped[str] = mapped_column(
+        String(20),
+        unique=True,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Biometrics
+    # ------------------------------------------------------
+
+    speaker_embedding: Mapped[list[float]] = mapped_column(
+        JSON,
+        nullable=False,
+    )
+
+    face_embedding: Mapped[list[float]] = mapped_column(
+        JSON,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Account Status
+    # ------------------------------------------------------
+
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
+    is_verified: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    failed_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Optional Profile
+    # ------------------------------------------------------
+
+    preferred_language: Mapped[str] = mapped_column(
+        String(20),
+        default="en",
+        nullable=False,
+    )
+
+    last_login_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
