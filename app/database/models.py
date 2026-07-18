@@ -358,3 +358,84 @@ class Transaction(
         default=False,
         nullable=False,
     )
+
+# ==========================================================
+# Fraud Event Model
+# ==========================================================
+
+class FraudEvent(
+    Base,
+    PrimaryKeyMixin,
+    TransactionIDMixin,
+    TimestampMixin,
+):
+    """
+    Stores security and fraud-related events.
+    """
+
+    __tablename__ = "fraud_events"
+
+    # ------------------------------------------------------
+    # User Information
+    # ------------------------------------------------------
+
+    user_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("users.user_id"),
+        nullable=False,
+        index=True,
+    )
+
+    # ------------------------------------------------------
+    # Fraud Details
+    # ------------------------------------------------------
+
+    event_type: Mapped[str] = mapped_column(
+        String(50),
+        nullable=False,
+    )
+
+    risk_level: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+    )
+
+    blocked: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )
+
+    # ------------------------------------------------------
+    # Detection Scores
+    # ------------------------------------------------------
+
+    speaker_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    face_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    fraud_score: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+    )
+
+    # ------------------------------------------------------
+    # Investigation
+    # ------------------------------------------------------
+
+    reason: Mapped[str] = mapped_column(
+        Text,
+        nullable=False,
+    )
+
+    replay_attack: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+    )

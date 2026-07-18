@@ -55,3 +55,15 @@ print(Transaction.__tablename__)
 print()
 
 print(list(Base.metadata.tables.keys()))
+
+from app.database.models import FraudEvent
+from app.database.database import Base
+
+print()
+print("========== FRAUD EVENT MODEL ==========")
+
+print(FraudEvent.__tablename__)
+
+print()
+
+print(list(Base.metadata.tables.keys()))
