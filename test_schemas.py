@@ -54,3 +54,215 @@ update = UserUpdateRequest(
 )
 
 print(update.model_dump(exclude_none=True))
+
+from app.database.schemas import (
+    TransactionInitiateRequest,
+    RiskAssessmentResponse,
+)
+
+print("\n========== TRANSACTION INITIATE ==========")
+
+request = TransactionInitiateRequest(
+    amount=2500.50,
+    recipient_id="merchant_001",
+    device_id="android_pixel_7",
+    audio_duration_seconds=4.2,
+    audio_size_mb=1.8,
+)
+
+print(request.model_dump())
+
+print("\n========== RISK RESPONSE ==========")
+
+risk = RiskAssessmentResponse(
+    transaction_id="TXN-12345678",
+    risk_level="MEDIUM",
+    speaker_score=0.82,
+    face_score=0.88,
+    fraud_score=0.42,
+    requires_verification=True,
+)
+
+print(risk.model_dump())
+
+from datetime import datetime, timedelta
+
+from app.database.schemas import (
+    PendingOTPResponse,
+    PendingChallengeResponse,
+    TransactionSuccessResponse,
+    TransactionFraudResponse,
+)
+
+expires = datetime.utcnow() + timedelta(minutes=5)
+
+print("\n========== OTP RESPONSE ==========")
+otp = PendingOTPResponse(
+    success=True,
+    message="OTP verification required",
+    transaction_id="TXN-OTP-001",
+    expires_at=expires,
+)
+print(otp.model_dump())
+
+print("\n========== CHALLENGE RESPONSE ==========")
+challenge = PendingChallengeResponse(
+    success=True,
+    message="Voice challenge required",
+    transaction_id="TXN-CH-001",
+    challenge_phrase="Transfer 409 green",
+    expires_at=expires,
+)
+print(challenge.model_dump())
+
+print("\n========== SUCCESS RESPONSE ==========")
+success = TransactionSuccessResponse(
+    success=True,
+    message="Transaction approved",
+    transaction_id="TXN-SUCCESS-001",
+    amount=2500.50,
+    risk_level="LOW",
+    xai_summary="Voice and face verification passed.",
+)
+print(success.model_dump())
+
+print("\n========== FRAUD RESPONSE ==========")
+fraud = TransactionFraudResponse(
+    success=False,
+    message="Replay attack detected",
+    error_code="REPLAY_ATTACK",
+    transaction_id="TXN-FRAUD-001",
+    replay_attack=True,
+)
+print(fraud.model_dump())
+
+from app.database.schemas import (
+    OTPVerificationRequest,
+    ChallengeVerificationRequest,
+)
+
+print("\n========== OTP VERIFICATION ==========")
+
+otp_request = OTPVerificationRequest(
+    transaction_id="TXN-OTP-001",
+    device_id="android_pixel_7",
+    otp_code="483291",
+)
+
+print(otp_request.model_dump())
+
+print("\n========== CHALLENGE VERIFICATION ==========")
+
+challenge_request = ChallengeVerificationRequest(
+    transaction_id="TXN-CH-001",
+    device_id="android_pixel_7",
+    audio_duration_seconds=3.8,
+    audio_size_mb=1.2,
+    challenge_attempt=1,
+)
+
+print(challenge_request.model_dump())
+
+from datetime import datetime, timedelta
+
+from app.database.schemas import (
+    VerificationSuccessResponse,
+    VerificationFailureResponse,
+    TransactionExpiredResponse,
+)
+
+print("\n========== VERIFICATION SUCCESS ==========")
+
+success = VerificationSuccessResponse(
+    success=True,
+    message="Verification successful",
+    transaction_id="TXN-OTP-001",
+    amount=2500.50,
+    risk_level="MEDIUM",
+    verification_method="otp",
+    xai_summary="OTP validated and biometric scores remained within threshold.",
+    processing_time_ms=842.5,
+)
+
+print(success.model_dump())
+
+print("\n========== VERIFICATION FAILURE ==========")
+
+failure = VerificationFailureResponse(
+    success=False,
+    message="Invalid OTP",
+    error_code="OTP_INVALID",
+    transaction_id="TXN-OTP-001",
+    verification_method="otp",
+    remaining_attempts=2,
+    risk_level="MEDIUM",
+)
+
+print(failure.model_dump())
+
+print("\n========== TRANSACTION EXPIRED ==========")
+
+expired = TransactionExpiredResponse(
+    success=False,
+    message="Transaction expired",
+    error_code="TRANSACTION_EXPIRED",
+    transaction_id="TXN-OTP-001",
+    expired_at=datetime.utcnow() - timedelta(minutes=1),
+)
+
+print(expired.model_dump())
+
+from datetime import datetime
+
+from app.database.schemas import (
+    TransactionSummary,
+    LedgerEntry,
+    TransactionResponse,
+)
+
+print("\n========== TRANSACTION SUMMARY ==========")
+
+summary = TransactionSummary(
+    transaction_id="TXN-123",
+    amount=2500.50,
+    status="SUCCESS",
+    risk_level="LOW",
+    created_at=datetime.utcnow(),
+)
+
+print(summary.model_dump())
+
+print("\n========== LEDGER ENTRY ==========")
+
+ledger = LedgerEntry(
+    transaction_id="TXN-123",
+    amount=2500.50,
+    entry_type="debit",
+    description="Transfer to merchant_001",
+    balance_after=12499.50,
+    created_at=datetime.utcnow(),
+)
+
+print(ledger.model_dump())
+
+print("\n========== TRANSACTION DETAIL ==========")
+
+detail = TransactionResponse(
+    id=1,
+    transaction_id="TXN-123",
+    user_id="user_001",
+    amount=2500.50,
+    status="SUCCESS",
+    risk_level="LOW",
+    success=True,
+    speaker_score=0.94,
+    face_score=0.91,
+    fraud_score=0.08,
+    replay_attack=False,
+    xai_reason="Voice and face verification passed with high confidence.",
+    processing_time_ms=842.5,
+    created_at=datetime.utcnow(),
+    updated_at=datetime.utcnow(),
+)
+
+print(detail.model_dump())
