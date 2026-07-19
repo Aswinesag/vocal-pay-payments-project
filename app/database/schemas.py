@@ -547,3 +547,72 @@ class TransactionResponse(BaseSchema):
     created_at: datetime
 
     updated_at: datetime
+
+class PaginationMeta(BaseSchema):
+    """
+    Pagination metadata.
+    """
+
+    page: int = Field(ge=1)
+
+    page_size: int = Field(ge=1, le=100)
+
+    total_items: int = Field(ge=0)
+
+    total_pages: int = Field(ge=0)
+
+    has_next: bool
+
+    has_previous: bool
+
+class TransactionHistoryResponse(APIResponse):
+    """
+    Paginated transaction history response.
+    """
+
+    data: list[TransactionSummary]
+
+    pagination: PaginationMeta
+
+class LedgerResponse(APIResponse):
+    """
+    Account ledger / statement response.
+    """
+
+    entries: list[LedgerEntry]
+
+    opening_balance: float | None = None
+
+    closing_balance: float | None = None
+
+    generated_at: datetime = Field(
+        default_factory=datetime.utcnow,
+    )
+
+class TransactionHistoryQuery(BaseSchema):
+    """
+    Transaction history query parameters.
+    """
+
+    page: int = Field(default=1, ge=1)
+
+    page_size: int = Field(default=20, ge=1, le=100)
+
+    status: str | None = None
+
+    risk_level: str | None = None
+
+    start_date: datetime | None = None
+
+    end_date: datetime | None = None
+
+    sort_desc: bool = True
+
+# ==========================================================
+# Unified History Models
+# ==========================================================
+
+TransactionHistoryItem = (
+    TransactionSummary
+    | TransactionResponse
+)

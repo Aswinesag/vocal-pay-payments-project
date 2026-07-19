@@ -266,3 +266,77 @@ detail = TransactionResponse(
 )
 
 print(detail.model_dump())
+
+from datetime import datetime
+
+from app.database.schemas import (
+    PaginationMeta,
+    TransactionHistoryResponse,
+    LedgerResponse,
+    TransactionHistoryQuery,
+    TransactionSummary,
+    LedgerEntry,
+)
+
+print("\n========== PAGINATION ==========")
+
+pagination = PaginationMeta(
+    page=1,
+    page_size=20,
+    total_items=42,
+    total_pages=3,
+    has_next=True,
+    has_previous=False,
+)
+
+print(pagination.model_dump())
+
+print("\n========== HISTORY RESPONSE ==========")
+
+history = TransactionHistoryResponse(
+    success=True,
+    message="History fetched successfully",
+    data=[
+        TransactionSummary(
+            transaction_id="TXN-001",
+            amount=2500.50,
+            status="SUCCESS",
+            risk_level="LOW",
+            created_at=datetime.utcnow(),
+        )
+    ],
+    pagination=pagination,
+)
+
+print(history.model_dump())
+
+print("\n========== LEDGER RESPONSE ==========")
+
+ledger = LedgerResponse(
+    success=True,
+    message="Ledger generated",
+    entries=[
+        LedgerEntry(
+            transaction_id="TXN-001",
+            amount=2500.50,
+            entry_type="debit",
+            description="Transfer to merchant_001",
+            balance_after=12499.50,
+            created_at=datetime.utcnow(),
+        )
+    ],
+    opening_balance=15000.00,
+    closing_balance=12499.50,
+)
+
+print(ledger.model_dump())
+
+print("\n========== HISTORY QUERY ==========")
+
+query = TransactionHistoryQuery(
+    page=2,
+    page_size=10,
+    status="SUCCESS",
+)
+
+print(query.model_dump(exclude_none=True))
