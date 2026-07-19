@@ -439,3 +439,175 @@ dashboard = SecurityDashboardSummary(
 )
 
 print(dashboard.model_dump())
+
+from app.database.models import (
+    User,
+    Transaction,
+)
+from app.database.schemas import (
+    UserResponse,
+    TransactionResponse,
+)
+
+print("\n========== ORM SERIALIZATION ==========")
+
+from datetime import datetime
+
+orm_user = User(
+    id=1,
+    user_id="user_001",
+    full_name="Aswin Kumar",
+    email="aswin@example.com",
+    phone_number="+919876543210",
+    preferred_language="en",
+    is_active=True,
+    is_verified=True,
+    failed_attempts=0,
+    created_at=datetime.utcnow(),
+    updated_at=datetime.utcnow(),
+)
+
+user_schema = UserResponse.model_validate(orm_user)
+
+print(user_schema.model_dump())
+
+# Fake ORM transaction object
+orm_tx = Transaction(
+    id=1,
+    transaction_id="TXN-123",
+    user_id="user_001",
+    amount=2500.50,
+    status="SUCCESS",
+    risk_level="LOW",
+    success=True,
+    speaker_score=0.94,
+    face_score=0.91,
+    fraud_score=0.08,
+    replay_attack=False,
+    xai_reason="Voice and face verification passed.",
+    processing_time_ms=842.5,
+    created_at=datetime.utcnow(),
+    updated_at=datetime.utcnow(),
+)
+
+tx_schema = TransactionResponse.model_validate(orm_tx)
+
+print(tx_schema.model_dump())
+
+from app.database.schemas import (
+    TransactionInitiateResponse,
+    TransactionVerifyResponse,
+    PendingOTPResponse,
+    VerificationSuccessResponse,
+)
+from datetime import datetime, timedelta
+
+print("\n========== UNION VALIDATION ==========")
+
+# Initiate union
+otp_response = PendingOTPResponse(
+    success=True,
+    message="OTP required",
+    transaction_id="TXN-OTP-001",
+    expires_at=datetime.utcnow() + timedelta(minutes=5),
+)
+
+print(type(otp_response).__name__)
+
+# Verify union
+verify_response = VerificationSuccessResponse(
+    success=True,
+    message="Verified",
+    transaction_id="TXN-OTP-001",
+    amount=2500.50,
+    risk_level="MEDIUM",
+    verification_method="otp",
+    xai_summary="OTP validated successfully.",
+    processing_time_ms=812.3,
+)
+
+print(type(verify_response).__name__)
+
+from app.database.schemas import (
+    TransactionInitiateRequest,
+    PendingChallengeResponse,
+    ChallengeVerificationRequest,
+    VerificationSuccessResponse,
+)
+
+print("\n========== END-TO-END LIFECYCLE ==========")
+
+# Step 1: Client initiates transaction
+init_request = TransactionInitiateRequest(
+    amount=50000,
+    recipient_id="merchant_001",
+    device_id="android_pixel_7",
+    audio_duration_seconds=4.5,
+    audio_size_mb=1.9,
+)
+
+print("INITIATE:", init_request.amount)
+
+# Step 2: Server returns HIGH risk challenge
+challenge_response = PendingChallengeResponse(
+    success=True,
+    message="Voice challenge required",
+    transaction_id="TXN-HIGH-001",
+    challenge_phrase="Transfer 409 green",
+    expires_at=datetime.utcnow() + timedelta(minutes=5),
+)
+
+print("CHALLENGE:", challenge_response.challenge_phrase)
+
+# Step 3: Client uploads verification audio
+verify_request = ChallengeVerificationRequest(
+    transaction_id="TXN-HIGH-001",
+    device_id="android_pixel_7",
+    audio_duration_seconds=3.2,
+    audio_size_mb=1.1,
+)
+
+print("VERIFY:", verify_request.transaction_id)
+
+# Step 4: Server approves transaction
+final_response = VerificationSuccessResponse(
+    success=True,
+    message="Challenge verified",
+    transaction_id="TXN-HIGH-001",
+    amount=50000,
+    risk_level="HIGH",
+    verification_method="voice_challenge",
+    xai_summary="Challenge phrase matched Whisper transcription.",
+    processing_time_ms=1240.7,
+)
+
+print("FINAL:", final_response.status)
+
+from app.database.schemas import (
+    TransactionInitiateRequest,
+    OTPVerificationRequest,
+)
+
+print("\n========== INTEGRITY CHECKS ==========")
+
+# Oversized audio should fail
+try:
+    TransactionInitiateRequest(
+        amount=100,
+        recipient_id="merchant_001",
+        device_id="android_pixel_7",
+        audio_duration_seconds=15,  # exceeds 10s limit
+        audio_size_mb=1.0,
+    )
+except Exception as e:
+    print("Audio duration validation: PASS")
+
+# Invalid OTP should fail
+try:
+    OTPVerificationRequest(
+        transaction_id="TXN-001",
+        device_id="android_pixel_7",
+        otp_code="12AB34",
+    )
+except Exception as e:
+    print("OTP validation: PASS")
