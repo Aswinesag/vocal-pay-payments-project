@@ -340,3 +340,102 @@ query = TransactionHistoryQuery(
 )
 
 print(query.model_dump(exclude_none=True))
+
+from datetime import datetime
+
+from app.database.schemas import (
+    FraudEventResponse,
+    FraudEventCreate,
+    FraudStatistics,
+)
+
+print("\n========== FRAUD EVENT RESPONSE ==========")
+
+fraud_response = FraudEventResponse(
+    id=1,
+    transaction_id="TXN-FRAUD-001",
+    user_id="user_001",
+    event_type="REPLAY_ATTACK",
+    risk_level="CRITICAL",
+    blocked=True,
+    replay_attack=True,
+    reason="Spectral roll-off below threshold.",
+    created_at=datetime.utcnow(),
+)
+
+print(fraud_response.model_dump())
+
+print("\n========== FRAUD CREATE ==========")
+
+fraud_create = FraudEventCreate(
+    transaction_id="TXN-FRAUD-001",
+    user_id="user_001",
+    event_type="REPLAY_ATTACK",
+    risk_level="CRITICAL",
+    blocked=True,
+    replay_attack=True,
+    reason="DSP replay detector triggered.",
+)
+
+print(fraud_create.model_dump())
+
+print("\n========== FRAUD STATS ==========")
+
+stats = FraudStatistics(
+    total_events=42,
+    blocked_events=18,
+    replay_attacks=7,
+    liveness_failures=5,
+    biometric_mismatches=4,
+    challenge_failures=2,
+    last_24h_events=6,
+)
+
+print(stats.model_dump())
+
+from app.database.schemas import (
+    AuditLogResponse,
+    AuditLogQuery,
+    SecurityDashboardSummary,
+)
+
+print("\n========== AUDIT RESPONSE ==========")
+
+audit = AuditLogResponse(
+    id=1,
+    transaction_id="TXN-123",
+    user_id="user_001",
+    endpoint="/api/v1/transaction/initiate",
+    method="POST",
+    event_type="TRANSACTION_INITIATED",
+    status="SUCCESS",
+    message="Transaction initiation completed.",
+    processing_time_ms=842.5,
+    created_at=datetime.utcnow(),
+)
+
+print(audit.model_dump())
+
+print("\n========== AUDIT QUERY ==========")
+
+query = AuditLogQuery(
+    page=1,
+    page_size=100,
+    event_type="TRANSACTION_INITIATED",
+)
+
+print(query.model_dump(exclude_none=True))
+
+print("\n========== DASHBOARD SUMMARY ==========")
+
+dashboard = SecurityDashboardSummary(
+    active_users=128,
+    transactions_today=542,
+    fraud_events_today=7,
+    blocked_transactions_today=3,
+    replay_attacks_today=2,
+    average_fraud_score=0.31,
+    system_health="healthy",
+)
+
+print(dashboard.model_dump())

@@ -616,3 +616,190 @@ TransactionHistoryItem = (
     TransactionSummary
     | TransactionResponse
 )
+
+# ==========================================================
+# Fraud & Audit Schemas
+# ==========================================================
+
+class FraudEventResponse(BaseSchema):
+    """
+    Fraud event response model.
+    """
+
+    id: int
+
+    transaction_id: str
+
+    user_id: str
+
+    event_type: str
+
+    risk_level: str
+
+    blocked: bool
+
+    speaker_score: float | None = None
+
+    face_score: float | None = None
+
+    fraud_score: float | None = None
+
+    replay_attack: bool
+
+    reason: str
+
+    created_at: datetime
+
+class FraudEventCreate(BaseSchema):
+    """
+    Internal fraud event creation schema.
+    """
+
+    transaction_id: str
+
+    user_id: str
+
+    event_type: str
+
+    risk_level: str
+
+    blocked: bool = False
+
+    speaker_score: float | None = None
+
+    face_score: float | None = None
+
+    fraud_score: float | None = None
+
+    replay_attack: bool = False
+
+    reason: str = Field(
+        min_length=5,
+        max_length=2000,
+    )
+
+class FraudStatistics(BaseSchema):
+    """
+    Aggregate fraud statistics.
+    """
+
+    total_events: int = Field(ge=0)
+
+    blocked_events: int = Field(ge=0)
+
+    replay_attacks: int = Field(ge=0)
+
+    liveness_failures: int = Field(ge=0)
+
+    biometric_mismatches: int = Field(ge=0)
+
+    challenge_failures: int = Field(ge=0)
+
+    last_24h_events: int = Field(ge=0)
+
+class FraudTrendPoint(BaseSchema):
+    """
+    Time-series fraud metric.
+    """
+
+    timestamp: datetime
+
+    event_count: int = Field(ge=0)
+
+class AuditLogResponse(BaseSchema):
+    """
+    Audit log response model.
+    """
+
+    id: int
+
+    transaction_id: str
+
+    user_id: str | None = None
+
+    endpoint: str
+
+    method: str
+
+    event_type: str
+
+    status: str
+
+    message: str
+
+    client_ip: str | None = None
+
+    user_agent: str | None = None
+
+    processing_time_ms: float | None = None
+
+    created_at: datetime
+
+class AuditLogQuery(BaseSchema):
+    """
+    Audit log query parameters.
+    """
+
+    page: int = Field(default=1, ge=1)
+
+    page_size: int = Field(default=50, ge=1, le=200)
+
+    event_type: str | None = None
+
+    status: str | None = None
+
+    user_id: str | None = None
+
+    transaction_id: str | None = None
+
+    start_date: datetime | None = None
+
+    end_date: datetime | None = None
+
+    sort_desc: bool = True
+
+class SecurityDashboardSummary(BaseSchema):
+    """
+    High-level security dashboard summary.
+    """
+
+    active_users: int = Field(ge=0)
+
+    transactions_today: int = Field(ge=0)
+
+    fraud_events_today: int = Field(ge=0)
+
+    blocked_transactions_today: int = Field(ge=0)
+
+    replay_attacks_today: int = Field(ge=0)
+
+    average_fraud_score: float = Field(ge=0, le=1)
+
+    system_health: str = Field(
+        examples=["healthy", "degraded", "critical"],
+    )
+
+class SecurityDashboardResponse(APIResponse):
+    """
+    Complete security dashboard payload.
+    """
+
+    summary: SecurityDashboardSummary
+
+    recent_fraud_events: list[FraudEventResponse]
+
+    fraud_trends: list[FraudTrendPoint]
+
+# ==========================================================
+# Unified Admin Models
+# ==========================================================
+
+AdminEvent = (
+    FraudEventResponse
+    | AuditLogResponse
+)
+
+AdminDashboardData = (
+    SecurityDashboardResponse
+    | TransactionHistoryResponse
+)
