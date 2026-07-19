@@ -17,6 +17,11 @@ from sqlalchemy.orm import (
     DeclarativeBase,
     sessionmaker,
 )
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from collections.abc import Generator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -28,13 +33,46 @@ from sqlalchemy.exc import SQLAlchemyError
 from pathlib import Path
 
 # ==========================================================
+# Database URLs
+# ==========================================================
+
+DATABASE_URL = settings.DATABASE_URL
+
+ASYNC_DATABASE_URL = DATABASE_URL.replace(
+    "sqlite:///",
+    "sqlite+aiosqlite:///",
+)
+
+# ==========================================================
+# Declarative Base
+# ==========================================================
+
+class Base(DeclarativeBase):
+    """
+    Base class for all ORM models.
+    """
+
+    pass
+
+# ==========================================================
 # SQLAlchemy Engine
 # ==========================================================
 
 engine = create_engine(
-    settings.DATABASE_URL,
+    DATABASE_URL,
     echo=settings.SQL_ECHO,
     future=True,
+)
+
+# ==========================================================
+# Async Engine
+# ==========================================================
+
+async_engine = create_async_engine(
+    ASYNC_DATABASE_URL,
+    echo=False,
+    future=True,
+    pool_pre_ping=True,
 )
 
 # ==========================================================
@@ -49,15 +87,16 @@ SessionLocal = sessionmaker(
 )
 
 # ==========================================================
-# Declarative Base
+# Async Session Factory
 # ==========================================================
 
-class Base(DeclarativeBase):
-    """
-    Base class for all ORM models.
-    """
-
-    pass
+AsyncSessionLocal = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autoflush=False,
+    autocommit=False,
+)
 
 # ==========================================================
 # Database Dependency
@@ -191,6 +230,13 @@ def initialize_database() -> None:
 
         raise
 
+def init_db() -> None:
+    """
+    Public database initialization entry point.
+    """
+
+    initialize_database()
+
 # ==========================================================
 # Database Validation
 # ==========================================================
@@ -271,6 +317,14 @@ def shutdown_database() -> None:
     system_logger.info(
         "Database engine shutdown complete."
     )
+
+async def close_db() -> None:
+    """
+    Gracefully shuts down both database engines.
+    """
+
+    await async_engine.dispose()
+    shutdown_database()
 
 # ==========================================================
 # Database Information
