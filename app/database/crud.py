@@ -14,6 +14,7 @@ from app.database.models import (
     Transaction,
     User,
 )
+from app.database.schemas import UserRegistrationRequest
 
 # ==========================================================
 # Type Aliases
@@ -129,3 +130,88 @@ async def safe_flush(db: DBSession) -> None:
         )
 
         raise
+
+async def create_user(
+    session: AsyncSession,
+    user_data: UserRegistrationRequest,
+) -> User:
+    """
+    Create a new user record.
+
+    Raises:
+        ValueError:
+            If the user_id, email, or phone number already exists.
+
+        SQLAlchemyError:
+            If the database operation fails.
+    """
+
+    # --------------------------------------------------
+    # Duplicate User ID
+    # --------------------------------------------------
+
+    existing = await session.scalar(
+        select(User).where(User.user_id == user_data.user_id)
+    )
+
+    if existing is not None:
+        raise ValueError(
+            f"User ID '{user_data.user_id}' already exists."
+        )
+
+    # --------------------------------------------------
+    # Duplicate Email
+    # --------------------------------------------------
+
+    existing = await session.scalar(
+        select(User).where(User.email == user_data.email)
+    )
+
+    if existing is not None:
+        raise ValueError(
+            f"Email '{user_data.email}' already exists."
+        )
+
+    # --------------------------------------------------
+    # Duplicate Phone
+    # --------------------------------------------------
+
+    existing = await session.scalar(
+        select(User).where(
+            User.phone_number == user_data.phone_number
+        )
+    )
+
+    if existing is not None:
+        raise ValueError(
+            f"Phone number '{user_data.phone_number}' already exists."
+        )
+
+    # --------------------------------------------------
+    # Create ORM Object
+    # --------------------------------------------------
+
+    user = User(
+        user_id=user_data.user_id,
+        full_name=user_data.full_name,
+        email=user_data.email,
+        phone_number=user_data.phone_number,
+        preferred_language=user_data.preferred_language,
+        speaker_embedding=user_data.speaker_embedding,
+        face_embedding=user_data.face_embedding,
+        is_active=True,
+        is_verified=False,
+        failed_attempts=0,
+    )
+
+    session.add(user)
+
+    try:
+        await safe_flush(session)
+
+    except IntegrityError as exc:
+        raise ValueError(
+            "A user with the same unique information already exists."
+        ) from exc
+
+    return user
