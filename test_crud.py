@@ -58,6 +58,7 @@ from app.database.crud import (
     create_pending_transaction,
     create_transaction,
     create_fraud_event,
+    create_audit_log,
     create_user,
     deactivate_user,
     delete_expired_pending_transactions,
@@ -67,9 +68,16 @@ from app.database.crud import (
     get_fraud_detection_rate,
     get_fraud_event_count,
     get_fraud_events_by_user_id,
+    get_audit_logs_by_transaction_id,
+    get_audit_logs_by_user_id,
+    get_audit_log_count,
+    get_logs_by_action,
+    get_logs_by_actor,
+    get_logs_by_time_range,
     get_blocked_events,
     get_high_risk_events,
     get_recent_fraud_events,
+    get_recent_audit_logs,
     get_replay_attack_events,
     get_pending_transaction_by_transaction_id,
     get_pending_transaction_by_verification_secret,
@@ -211,7 +219,7 @@ asyncio.run(test_user_account_state())
 
 from datetime import timedelta
 
-from app.database.models import FraudEvent, PendingTransaction, Transaction
+from app.database.models import AuditLog, FraudEvent, PendingTransaction, Transaction
 
 
 async def test_create_pending_transaction():
@@ -800,3 +808,191 @@ async def test_fraud_investigation_queries():
 
 
 asyncio.run(test_fraud_investigation_queries())
+
+async def test_create_audit_log():
+    async with AsyncSessionLocal() as session:
+
+        audit = AuditLog(
+            transaction_id="TXN8001",
+            user_id="USR0004",
+            endpoint="/transactions",
+            method="SYSTEM",
+            event_type="TRANSACTION_CREATED",
+            status="SUCCESS",
+            message="Transaction successfully created.",
+        )
+
+        await create_audit_log(
+            session,
+            audit,
+        )
+
+        print("\n========== AUDIT LOG ==========")
+        print(audit.transaction_id)
+        print(audit.event_type)
+        print(audit.method)
+
+        await session.rollback()
+
+
+asyncio.run(test_create_audit_log())
+
+async def test_audit_log_lookup():
+    async with AsyncSessionLocal() as session:
+
+        log1 = AuditLog(
+            transaction_id="TXN8002",
+            user_id="USR0004",
+            endpoint="/verification/voice",
+            method="SYSTEM",
+            event_type="VOICE_VERIFIED",
+            status="SUCCESS",
+            message="Voice authentication passed.",
+        )
+
+        log2 = AuditLog(
+            transaction_id="TXN8003",
+            user_id="USR0004",
+            endpoint="/verification/face",
+            method="SYSTEM",
+            event_type="FACE_VERIFIED",
+            status="SUCCESS",
+            message="Face authentication passed.",
+        )
+
+        await create_audit_log(session, log1)
+        await create_audit_log(session, log2)
+
+        print("\n========== AUDIT LOOKUP ==========")
+
+        tx_logs = await get_audit_logs_by_transaction_id(
+            session,
+            "TXN8002",
+        )
+
+        print("Transaction Logs:", len(tx_logs))
+
+        for log in tx_logs:
+            print(log.event_type)
+
+        user_logs = await get_audit_logs_by_user_id(
+            session,
+            "USR0004",
+        )
+
+        print("User Logs:", len(user_logs))
+
+        await session.rollback()
+
+
+asyncio.run(test_audit_log_lookup())
+
+async def test_audit_monitoring():
+    async with AsyncSessionLocal() as session:
+
+        log1 = AuditLog(
+            transaction_id="TXN9001",
+            user_id="USR0004",
+            endpoint="/login",
+            method="SYSTEM",
+            event_type="LOGIN",
+            status="SUCCESS",
+            message="User logged in.",
+        )
+
+        log2 = AuditLog(
+            transaction_id="TXN9002",
+            user_id="USR0004",
+            endpoint="/transactions/approve",
+            method="SYSTEM",
+            event_type="TRANSACTION_APPROVED",
+            status="SUCCESS",
+            message="Transaction approved.",
+        )
+
+        await create_audit_log(session, log1)
+        await create_audit_log(session, log2)
+
+        print("\n========== AUDIT MONITORING ==========")
+
+        recent = await get_recent_audit_logs(
+            session,
+            limit=10,
+        )
+
+        print("Recent:", len(recent))
+
+        total = await get_audit_log_count(session)
+        print("Total:", total)
+
+        user_total = await get_audit_log_count(
+            session,
+            user_id="USR0004",
+        )
+
+        print("User Total:", user_total)
+
+        if recent:
+            print("Latest Action:", recent[0].event_type)
+
+        await session.rollback()
+
+
+asyncio.run(test_audit_monitoring())
+
+async def test_audit_investigation_queries():
+    async with AsyncSessionLocal() as session:
+
+        now = utc_now()
+
+        log1 = AuditLog(
+            transaction_id="TXN9101",
+            user_id="USR0004",
+            endpoint="/verification/voice",
+            method="SYSTEM",
+            event_type="VOICE_VERIFIED",
+            status="SUCCESS",
+            message="Voice verification successful.",
+        )
+
+        log2 = AuditLog(
+            transaction_id="TXN9102",
+            user_id="USR0004",
+            endpoint="/login",
+            method="USER",
+            event_type="LOGIN",
+            status="SUCCESS",
+            message="User login.",
+        )
+
+        await create_audit_log(session, log1)
+        await create_audit_log(session, log2)
+
+        print("\n========== AUDIT INVESTIGATION ==========")
+
+        actions = await get_logs_by_action(
+            session,
+            "VOICE_VERIFIED",
+        )
+        print("Action:", len(actions))
+
+        actors = await get_logs_by_actor(
+            session,
+            "SYSTEM",
+        )
+        print("Actor:", len(actors))
+
+        timerange = await get_logs_by_time_range(
+            session,
+            now - timedelta(minutes=5),
+            now + timedelta(minutes=5),
+        )
+        print("Time Range:", len(timerange))
+
+        if timerange:
+            print("First:", timerange[0].event_type)
+
+        await session.rollback()
+
+
+asyncio.run(test_audit_investigation_queries())

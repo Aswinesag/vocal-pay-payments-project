@@ -12,6 +12,7 @@ Responsibilities
 """
 
 from __future__ import annotations
+from contextlib import asynccontextmanager
 from sqlalchemy import create_engine
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -22,7 +23,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from collections.abc import Generator
+from collections.abc import AsyncGenerator, Generator
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from app.core.config import settings
@@ -97,6 +98,29 @@ AsyncSessionLocal = async_sessionmaker(
     autoflush=False,
     autocommit=False,
 )
+
+# ==========================================================
+# Async Session Context Manager
+# ==========================================================
+
+@asynccontextmanager
+async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
+    """
+    Provide an atomic async database session.
+    """
+
+    session = AsyncSessionLocal()
+
+    try:
+        yield session
+        await session.commit()
+
+    except Exception:
+        await session.rollback()
+        raise
+
+    finally:
+        await session.close()
 
 # ==========================================================
 # Database Dependency

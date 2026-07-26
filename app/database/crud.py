@@ -1,15 +1,14 @@
 from __future__ import annotations
-from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from datetime import timedelta
-from typing import AsyncGenerator, TypeVar
+from typing import TypeVar
 from sqlalchemy import select
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logger import system_logger
-from app.database.database import AsyncSessionLocal
+from app.database.database import get_db_session as _get_db_session
 from app.database.models import (
     AuditLog,
     FraudEvent,
@@ -32,35 +31,16 @@ ModelType = TypeVar(
     AuditLog,
 )
 
+TransactionModelType = TypeVar(
+    "TransactionModelType",
+    PendingTransaction,
+    Transaction,
+    FraudEvent,
+    AuditLog,
+)
+
 DBSession = AsyncSession
-
-# ==========================================================
-# Atomic Session Manager
-# ==========================================================
-
-@asynccontextmanager
-async def get_db_session() -> AsyncGenerator[DBSession, None]:
-    """
-    Provides an atomic async database session.
-
-    Automatically:
-    - commits on success
-    - rolls back on failure
-    - closes the session
-    """
-
-    session = AsyncSessionLocal()
-
-    try:
-        yield session
-        await session.commit()
-
-    except Exception:
-        await session.rollback()
-        raise
-
-    finally:
-        await session.close()
+get_db_session = _get_db_session
 
 # ==========================================================
 # Utility Helpers
@@ -86,9 +66,9 @@ async def get_by_id(
 
 async def get_by_transaction_id(
     db: DBSession,
-    model: type[ModelType],
+    model: type[TransactionModelType],
     transaction_id: str,
-) -> ModelType | None:
+) -> TransactionModelType | None:
     """
     Fetches a model by transaction_id.
     """
@@ -946,6 +926,204 @@ async def get_recent_fraud_events(
         select(FraudEvent)
         .order_by(
             FraudEvent.created_at.desc()
+        )
+        .limit(limit)
+    )
+
+    return list(result)
+
+async def create_audit_log(
+    session: AsyncSession,
+    audit_log: AuditLog,
+) -> AuditLog:
+    """
+    Persist an immutable audit log entry.
+
+    The AuditLog ORM object must already be fully
+    populated by the service layer.
+
+    Returns:
+        Persisted AuditLog ORM object.
+    """
+
+    session.add(audit_log)
+
+    await safe_flush(session)
+
+    return audit_log
+
+async def get_audit_logs_by_transaction_id(
+    session: AsyncSession,
+    transaction_id: str,
+) -> list[AuditLog]:
+    """
+    Retrieve all audit logs associated with
+    a transaction.
+
+    Results are ordered chronologically.
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.transaction_id == transaction_id
+        )
+        .order_by(
+            AuditLog.created_at.asc()
+        )
+    )
+
+    return list(result)
+
+async def get_audit_logs_by_user_id(
+    session: AsyncSession,
+    user_id: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditLog]:
+    """
+    Retrieve audit logs for a user.
+
+    Results are ordered from newest to oldest.
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.user_id == user_id
+        )
+        .order_by(
+            AuditLog.created_at.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return list(result)
+
+async def get_recent_audit_logs(
+    session: AsyncSession,
+    *,
+    limit: int = 100,
+) -> list[AuditLog]:
+    """
+    Retrieve the most recent audit log entries.
+
+    Intended for:
+    - Admin dashboard
+    - Live monitoring
+    - Security operations
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .order_by(
+            AuditLog.created_at.desc()
+        )
+        .limit(limit)
+    )
+
+    return list(result)
+
+async def get_audit_log_count(
+    session: AsyncSession,
+    *,
+    user_id: str | None = None,
+) -> int:
+    """
+    Count audit log entries.
+
+    If user_id is supplied,
+    only that user's logs are counted.
+    """
+
+    stmt = select(func.count(AuditLog.id))
+
+    if user_id is not None:
+        stmt = stmt.where(
+            AuditLog.user_id == user_id
+        )
+
+    result = await session.scalar(stmt)
+
+    return int(result or 0)
+
+async def get_logs_by_action(
+    session: AsyncSession,
+    action: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditLog]:
+    """
+    Retrieve audit logs matching a specific action.
+
+    Results are ordered from newest to oldest.
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.event_type == action
+        )
+        .order_by(
+            AuditLog.created_at.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return list(result)
+
+async def get_logs_by_actor(
+    session: AsyncSession,
+    actor: str,
+    *,
+    limit: int = 100,
+    offset: int = 0,
+) -> list[AuditLog]:
+    """
+    Retrieve audit logs generated by a specific actor.
+
+    Results are ordered from newest to oldest.
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.method == actor
+        )
+        .order_by(
+            AuditLog.created_at.desc()
+        )
+        .offset(offset)
+        .limit(limit)
+    )
+
+    return list(result)
+
+async def get_logs_by_time_range(
+    session: AsyncSession,
+    start_time: datetime,
+    end_time: datetime,
+    *,
+    limit: int = 500,
+) -> list[AuditLog]:
+    """
+    Retrieve audit logs within a time range.
+
+    Results are ordered chronologically.
+    """
+
+    result = await session.scalars(
+        select(AuditLog)
+        .where(
+            AuditLog.created_at >= start_time,
+            AuditLog.created_at <= end_time,
+        )
+        .order_by(
+            AuditLog.created_at.asc()
         )
         .limit(limit)
     )
