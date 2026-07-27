@@ -17,12 +17,14 @@ business rules remain separate from persistence.
 
 from __future__ import annotations
 from typing import Final
+from uuid import uuid4
 from app.core.logger import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import User
 from app.database.schemas import (
     UserRegistrationRequest,
     UserResponse,
+    UserUpdateRequest,
 )
 from app.database import crud
 
@@ -386,6 +388,250 @@ def ensure_user_can_transact(
         raise UserValidationError(
             "Maximum authentication attempts exceeded."
         )
+
+def _normalize_optional_name(
+    full_name: str | None,
+) -> str | None:
+    """
+    Normalize an optional full name.
+
+    Returns:
+        Normalized name or None.
+    """
+
+    if full_name is None:
+        return None
+
+    return _validate_full_name(full_name)
+
+def _normalize_language(
+    language: str | None,
+) -> str:
+    """
+    Normalize the preferred language.
+
+    Falls back to the project default.
+    """
+
+    if language is None:
+        return DEFAULT_LANGUAGE
+
+    language = language.strip().lower()
+
+    if not language:
+        return DEFAULT_LANGUAGE
+
+    return language
+
+def _apply_profile_updates(
+    user: User,
+    update: UserUpdateRequest,
+) -> None:
+    """
+    Apply validated profile updates to a User ORM object.
+    """
+
+    if update.full_name is not None:
+        user.full_name = _normalize_optional_name(
+            update.full_name
+        )
+
+    if update.preferred_language is not None:
+        user.preferred_language = _normalize_language(
+            update.preferred_language
+        )
+
+async def update_user_profile(
+    session: AsyncSession,
+    user_id: str,
+    update: UserUpdateRequest,
+) -> UserResponse:
+    """
+    Update a user's profile information.
+
+    Workflow:
+        1. Retrieve the user.
+        2. Validate account state.
+        3. Apply business updates.
+        4. Persist changes.
+        5. Record audit event.
+        6. Return updated profile.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    user = await crud.update_user_profile(
+        session,
+        user,
+        full_name=_normalize_optional_name(update.full_name),
+        email=update.email,
+        phone_number=update.phone_number,
+        preferred_language=(
+            _normalize_language(update.preferred_language)
+            if update.preferred_language is not None
+            else None
+        ),
+    )
+
+    await _log_profile_update(
+        session,
+        user,
+    )
+
+    _log_profile_operation(
+        "PROFILE_UPDATED",
+        user.user_id,
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def _log_profile_update(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record a profile update event.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"PROFILE_{uuid4().hex}",
+        endpoint="/users/profile",
+        method="USER",
+        event_type="PROFILE_UPDATED",
+        status="SUCCESS",
+        message=(
+            f"Profile updated for '{user.user_id}'."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Profile update audit created for '{user.user_id}'.",
+    )
+
+async def _log_language_update(
+    session: AsyncSession,
+    user: User,
+    previous_language: str,
+) -> None:
+    """
+    Record a preferred language update.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"LANGUAGE_{uuid4().hex}",
+        endpoint="/users/language",
+        method="USER",
+        event_type="LANGUAGE_UPDATED",
+        status="SUCCESS",
+        message=(
+            f"Preferred language changed "
+            f"from '{previous_language}' "
+            f"to '{user.preferred_language}'."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Language updated for '{user.user_id}': "
+        f"{previous_language} -> {user.preferred_language}",
+    )
+
+async def update_preferred_language(
+    session: AsyncSession,
+    user_id: str,
+    language: str,
+) -> UserResponse:
+    """
+    Update a user's preferred language.
+
+    Workflow:
+        1. Retrieve user.
+        2. Validate account.
+        3. Normalize language.
+        4. Persist update.
+        5. Record audit event.
+        6. Return updated profile.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    previous_language = user.preferred_language
+
+    normalized_language = _normalize_language(
+        language,
+    )
+
+    if normalized_language == previous_language:
+        logger.info(
+            f"Preferred language unchanged for '{user.user_id}'.",
+        )
+
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.update_user_profile(
+        session,
+        user,
+        preferred_language=normalized_language,
+    )
+
+    await _log_language_update(
+        session,
+        user,
+        previous_language,
+    )
+
+    _log_profile_operation(
+        "LANGUAGE_UPDATED",
+        user.user_id,
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+def _log_profile_operation(
+    operation: str,
+    user_id: str,
+) -> None:
+    """
+    Emit a standardized profile operation log.
+
+    This helper keeps logging consistent across all
+    profile-related service methods.
+    """
+
+    logger.info(
+        f"Profile operation '{operation}' completed "
+        f"for user '{user_id}'.",
+    )
 
 __all__ = [
     "UserServiceError",
