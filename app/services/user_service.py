@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Final
 from app.core.logger import get_logger
 from sqlalchemy.ext.asyncio import AsyncSession
+from app.database.models import User
 from app.database.schemas import (
     UserRegistrationRequest,
     UserResponse,
@@ -184,6 +185,207 @@ async def _log_user_registration(
         audit,
     )
 
+async def _get_user_by_id(
+    session: AsyncSession,
+    user_id: str,
+) -> User:
+    """
+    Retrieve a user by user ID.
+
+    Raises:
+        UserNotFoundError
+    """
+
+    user = await crud.get_user_by_user_id(
+        session,
+        user_id,
+    )
+
+    if user is None:
+        raise UserNotFoundError(
+            f"User '{user_id}' was not found."
+        )
+
+    return user
+
+async def _get_user_by_email(
+    session: AsyncSession,
+    email: str,
+) -> User:
+    """
+    Retrieve a user by email address.
+
+    Raises:
+        UserNotFoundError
+    """
+
+    user = await crud.get_user_by_email(
+        session,
+        email,
+    )
+
+    if user is None:
+        raise UserNotFoundError(
+            f"Email '{email}' is not registered."
+        )
+
+    return user
+
+async def _ensure_active_user(
+    session: AsyncSession,
+    user_id: str,
+) -> None:
+    """
+    Ensure the user account is active.
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    if not user.is_active:
+        raise UserInactiveError(
+            f"User '{user.user_id}' is inactive."
+        )
+
+async def get_user_profile(
+    session: AsyncSession,
+    user_id: str,
+) -> UserResponse:
+    """
+    Retrieve an active user's profile.
+
+    Args:
+        session: Active database session.
+        user_id: User identifier.
+
+    Returns:
+        UserResponse
+
+    Raises:
+        UserNotFoundError
+        UserInactiveError
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    await _ensure_active_user(
+        session,
+        user.user_id,
+    )
+
+    logger.info(
+        f"Retrieved profile for user '{user.user_id}'.",
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def get_user_profile_by_email(
+    session: AsyncSession,
+    email: str,
+) -> UserResponse:
+    """
+    Retrieve an active user's profile using
+    their email address.
+
+    Args:
+        session: Active database session.
+        email: Registered email.
+
+    Returns:
+        UserResponse
+
+    Raises:
+        UserNotFoundError
+        UserInactiveError
+    """
+
+    user = await _get_user_by_email(
+        session,
+        email,
+    )
+
+    await _ensure_active_user(
+        session,
+        user.user_id,
+    )
+
+    logger.info(
+        f"Retrieved profile for email '{email}'.",
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def get_user_entity(
+    session: AsyncSession,
+    user_id: str,
+) -> User:
+    """
+    Retrieve a validated User ORM object.
+
+    This function is intended for internal service
+    consumption where the ORM entity is required
+    instead of a response schema.
+
+    Raises:
+        UserNotFoundError
+        UserInactiveError
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    await _ensure_active_user(
+        session,
+        user.user_id,
+    )
+
+    return user
+
+def ensure_verified_user(
+    user: User,
+) -> None:
+    """
+    Ensure the user has completed
+    biometric/account verification.
+    """
+
+    if not user.is_verified:
+        raise UserValidationError(
+            f"User '{user.user_id}' is not verified."
+        )
+
+def ensure_user_can_transact(
+    user: User,
+) -> None:
+    """
+    Ensure the user is eligible to
+    perform financial transactions.
+    """
+
+    if not user.is_active:
+        raise UserInactiveError(
+            f"User '{user.user_id}' is inactive."
+        )
+
+    ensure_verified_user(user)
+
+    if user.failed_attempts >= MAX_FAILED_LOGIN_ATTEMPTS:
+        raise UserValidationError(
+            "Maximum authentication attempts exceeded."
+        )
 
 __all__ = [
     "UserServiceError",
