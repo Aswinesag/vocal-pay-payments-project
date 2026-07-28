@@ -28,13 +28,22 @@ from app.services.user_service import (
     _apply_profile_updates,
     _normalize_language,
     _normalize_optional_name,
+    _validate_face_embedding,
+    _validate_speaker_embedding,
     get_user_profile,
     get_user_profile_by_email,
     get_user_entity,
+    get_biometric_profile,
+    get_biometric_status,
+    get_face_embedding,
+    get_speaker_embedding,
+    has_complete_biometrics,
     ensure_user_can_transact,
     ensure_verified_user,
     register_user,
     update_preferred_language,
+    update_face_embedding,
+    update_speaker_embedding,
     update_user_profile,
     UserAlreadyExistsError,
     UserNotFoundError,
@@ -436,5 +445,253 @@ async def test_profile_operations():
 
         await session.rollback()
 
-
 asyncio.run(test_profile_operations())
+
+print("\n========== BIOMETRIC HELPERS ==========")
+
+print(
+    _validate_speaker_embedding(
+        [0.1, 0.2]
+    )
+)
+
+print(
+    _validate_face_embedding(
+        [0.3, 0.4]
+    )
+)
+
+user = User(
+    speaker_embedding=[0.1],
+    face_embedding=[0.2],
+)
+
+print(
+    has_complete_biometrics(user)
+)
+
+try:
+    _validate_speaker_embedding([])
+except UserValidationError as exc:
+    print(type(exc).__name__)
+    print(exc)
+
+async def test_speaker_enrollment():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_SPEAKER_001",
+            full_name="Voice User",
+            email="voice@example.com",
+            phone_number="+919555555555",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        profile = await update_speaker_embedding(
+            session,
+            created.user_id,
+            [0.3] * 192,
+        )
+
+        print("\n========== SPEAKER ENROLLMENT ==========")
+        print(profile.user_id)
+        user = await get_user_entity(session, created.user_id)
+        print(user.speaker_embedding is not None)
+
+        # Idempotent update
+        profile = await update_speaker_embedding(
+            session,
+            created.user_id,
+            [0.3] * 192,
+        )
+
+        user = await get_user_entity(session, created.user_id)
+        print(user.speaker_embedding is not None)
+
+        logs = await crud.get_audit_logs_by_user_id(
+            session,
+            created.user_id,
+        )
+
+        actions = [log.event_type for log in logs]
+
+        print(actions)
+
+        await session.rollback()
+
+
+asyncio.run(test_speaker_enrollment())
+
+async def test_face_enrollment():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_FACE_001",
+            full_name="Face User",
+            email="face@example.com",
+            phone_number="+919444444444",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        await update_speaker_embedding(
+            session,
+            created.user_id,
+            [0.3] * 192,
+        )
+
+        profile = await update_face_embedding(
+            session,
+            created.user_id,
+            [0.4] * 512,
+        )
+
+        print("\n========== FACE ENROLLMENT ==========")
+        print(profile.user_id)
+
+        user = await get_user_entity(
+            session,
+            created.user_id,
+        )
+
+        print(user.face_embedding is not None)
+        print(has_complete_biometrics(user))
+
+        logs = await crud.get_audit_logs_by_user_id(
+            session,
+            created.user_id,
+        )
+
+        actions = [log.event_type for log in logs]
+
+        print(actions)
+
+        await session.rollback()
+
+
+asyncio.run(test_face_enrollment())
+
+async def test_biometric_retrieval():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_BIOMETRIC_001",
+            full_name="Biometric User",
+            email="bio@example.com",
+            phone_number="+919333333333",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        await update_speaker_embedding(
+            session,
+            created.user_id,
+            [0.3] * 192,
+        )
+
+        await update_face_embedding(
+            session,
+            created.user_id,
+            [0.4] * 512,
+        )
+
+        speaker = await get_speaker_embedding(
+            session,
+            created.user_id,
+        )
+
+        face = await get_face_embedding(
+            session,
+            created.user_id,
+        )
+
+        both = await get_biometric_profile(
+            session,
+            created.user_id,
+        )
+
+        status = await get_biometric_status(
+            session,
+            created.user_id,
+        )
+
+        print("\n========== BIOMETRIC RETRIEVAL ==========")
+        print(speaker == [0.3] * 192)
+        print(face == [0.4] * 512)
+        print(len(both))
+        print(status)
+
+        await session.rollback()
+
+
+asyncio.run(test_biometric_retrieval())
+
+async def test_biometric_module():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_PRODUCTION_001",
+            full_name="Production User",
+            email="production@example.com",
+            phone_number="+919222222222",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        await update_speaker_embedding(
+            session,
+            created.user_id,
+            [0.3] * 192,
+        )
+
+        await update_face_embedding(
+            session,
+            created.user_id,
+            [0.4] * 512,
+        )
+
+        status = await get_biometric_status(
+            session,
+            created.user_id,
+        )
+
+        print("\n========== BIOMETRIC MODULE ==========")
+        print(status)
+
+        speaker, face = await get_biometric_profile(
+            session,
+            created.user_id,
+        )
+
+        print(speaker == [0.3] * 192)
+        print(face == [0.4] * 512)
+
+        await session.rollback()
+
+
+asyncio.run(test_biometric_module())

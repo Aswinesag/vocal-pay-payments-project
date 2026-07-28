@@ -633,6 +633,345 @@ def _log_profile_operation(
         f"for user '{user_id}'.",
     )
 
+def _validate_speaker_embedding(
+    embedding: list[float],
+) -> list[float]:
+    """
+    Validate a serialized speaker embedding.
+
+    The service layer intentionally does not validate
+    embedding dimensions because different biometric
+    models may produce different vector sizes.
+    """
+
+    if not embedding:
+        raise UserValidationError(
+            "Speaker embedding cannot be empty."
+        )
+
+    return embedding
+
+def _validate_face_embedding(
+    embedding: list[float],
+) -> list[float]:
+    """
+    Validate a serialized face embedding.
+    """
+
+    if not embedding:
+        raise UserValidationError(
+            "Face embedding cannot be empty."
+        )
+
+    return embedding
+
+def has_complete_biometrics(
+    user: User,
+) -> bool:
+    """
+    Determine whether a user has completed
+    biometric enrollment.
+
+    Returns:
+        True only if both speaker and face
+        embeddings exist.
+    """
+
+    return (
+        user.speaker_embedding is not None
+        and user.face_embedding is not None
+    )
+
+async def _log_speaker_enrollment(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record successful speaker enrollment.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"SPEAKER_{uuid4().hex}",
+        endpoint="/users/biometrics/speaker",
+        method="SYSTEM",
+        event_type="SPEAKER_ENROLLED",
+        status="SUCCESS",
+        message=(
+            f"Speaker embedding enrolled for "
+            f"user '{user.user_id}'."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Speaker enrollment audit created for '{user.user_id}'.",
+    )
+
+async def update_speaker_embedding(
+    session: AsyncSession,
+    user_id: str,
+    embedding: list[float],
+) -> UserResponse:
+    """
+    Store or replace a user's speaker embedding.
+
+    This method manages biometric enrollment only.
+    Speaker verification is handled by the
+    Authentication Service.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    validated_embedding = _validate_speaker_embedding(
+        embedding,
+    )
+
+    # Idempotent update
+    if user.speaker_embedding == validated_embedding:
+        logger.info(
+            f"Speaker embedding unchanged for '{user.user_id}'.",
+        )
+
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.update_biometric_embeddings(
+        session,
+        user,
+        speaker_embedding=validated_embedding,
+    )
+
+    await _log_speaker_enrollment(
+        session,
+        user,
+    )
+
+    _log_biometric_operation(
+        "SPEAKER_ENROLLED",
+        user.user_id,
+    )
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def _log_face_enrollment(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record successful face enrollment.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"FACE_{uuid4().hex}",
+        endpoint="/users/biometrics/face",
+        method="SYSTEM",
+        event_type="FACE_ENROLLED",
+        status="SUCCESS",
+        message=(
+            f"Face embedding enrolled for "
+            f"user '{user.user_id}'."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Face enrollment audit created for '{user.user_id}'.",
+    )
+
+async def update_face_embedding(
+    session: AsyncSession,
+    user_id: str,
+    embedding: list[float],
+) -> UserResponse:
+    """
+    Store or replace a user's face embedding.
+
+    This method manages biometric enrollment only.
+    Face verification is handled by the
+    Authentication Service.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    validated_embedding = _validate_face_embedding(
+        embedding,
+    )
+
+    # Idempotent update
+    if user.face_embedding == validated_embedding:
+        logger.info(
+            f"Face embedding unchanged for '{user.user_id}'.",
+        )
+
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.update_biometric_embeddings(
+        session,
+        user,
+        face_embedding=validated_embedding,
+    )
+
+    await _log_face_enrollment(
+        session,
+        user,
+    )
+
+    _log_biometric_operation(
+        "FACE_ENROLLED",
+        user.user_id,
+    )
+
+    if has_complete_biometrics(user):
+        _log_biometric_operation(
+            "BIOMETRIC_ENROLLMENT_COMPLETED",
+            user.user_id,
+        )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def get_speaker_embedding(
+    session: AsyncSession,
+    user_id: str,
+) -> list[float]:
+    """
+    Retrieve a user's stored speaker embedding.
+
+    Intended for internal service use only.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    if user.speaker_embedding is None:
+        raise UserValidationError(
+            "Speaker embedding has not been enrolled."
+        )
+
+    return user.speaker_embedding
+
+async def get_face_embedding(
+    session: AsyncSession,
+    user_id: str,
+) -> list[float]:
+    """
+    Retrieve a user's stored face embedding.
+
+    Intended for internal service use only.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    if user.face_embedding is None:
+        raise UserValidationError(
+            "Face embedding has not been enrolled."
+        )
+
+    return user.face_embedding
+
+async def get_biometric_profile(
+    session: AsyncSession,
+    user_id: str,
+) -> tuple[list[float], list[float]]:
+    """
+    Retrieve both enrolled biometric embeddings.
+
+    Intended for Authentication Service only.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    if not has_complete_biometrics(user):
+        raise UserValidationError(
+            "User has not completed biometric enrollment."
+        )
+
+    return (
+        user.speaker_embedding,
+        user.face_embedding,
+    )
+
+async def get_biometric_status(
+    session: AsyncSession,
+    user_id: str,
+) -> dict[str, bool]:
+    """
+    Retrieve biometric enrollment status.
+
+    This method intentionally exposes only
+    enrollment state—not biometric data.
+    """
+
+    user = await get_user_entity(
+        session,
+        user_id,
+    )
+
+    return {
+        "speaker_enrolled": (
+            user.speaker_embedding is not None
+        ),
+        "face_enrolled": (
+            user.face_embedding is not None
+        ),
+        "biometric_complete": (
+            has_complete_biometrics(user)
+        ),
+    }
+
+def _log_biometric_operation(
+    operation: str,
+    user_id: str,
+) -> None:
+    """
+    Emit a standardized biometric operation log.
+
+    This helper centralizes logging for all
+    biometric-related service methods.
+    """
+
+    logger.info(
+        f"Biometric operation '{operation}' completed "
+        f"for user '{user_id}'.",
+    )
+
 __all__ = [
     "UserServiceError",
     "UserAlreadyExistsError",
