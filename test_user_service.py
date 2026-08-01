@@ -31,6 +31,7 @@ from app.services.user_service import (
     _validate_face_embedding,
     _validate_speaker_embedding,
     activate_user_account,
+    deactivate_user_account,
     get_user_profile,
     get_user_profile_by_email,
     get_user_entity,
@@ -41,7 +42,9 @@ from app.services.user_service import (
     has_complete_biometrics,
     ensure_user_can_transact,
     ensure_verified_user,
+    increment_failed_attempts,
     register_user,
+    reset_failed_attempts,
     update_preferred_language,
     update_face_embedding,
     update_speaker_embedding,
@@ -745,3 +748,155 @@ async def test_account_activation():
 
 
 asyncio.run(test_account_activation())
+
+async def test_account_deactivation():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_DEACTIVATION_001",
+            full_name="Deactivation User",
+            email="deactivate@example.com",
+            phone_number="+919000000000",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        profile = await deactivate_user_account(
+            session,
+            created.user_id,
+        )
+
+        print("\n========== ACCOUNT DEACTIVATION ==========")
+        print(profile.user_id)
+        print(profile.is_active)
+
+        # Idempotent call
+        profile = await deactivate_user_account(
+            session,
+            created.user_id,
+        )
+
+        print(profile.is_active)
+
+        logs = await crud.get_audit_logs_by_user_id(
+            session,
+            created.user_id,
+        )
+
+        actions = [log.event_type for log in logs]
+
+        print(actions)
+
+        await session.rollback()
+
+
+asyncio.run(test_account_deactivation())
+
+async def test_failed_attempts():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_SECURITY_001",
+            full_name="Security User",
+            email="security@example.com",
+            phone_number="+918999999999",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        print("\n========== FAILED AUTHENTICATION ==========")
+
+        for _ in range(5):
+            profile = await increment_failed_attempts(
+                session,
+                created.user_id,
+            )
+
+            print(
+                profile.failed_attempts,
+                profile.is_active,
+            )
+
+        profile = await reset_failed_attempts(
+            session,
+            created.user_id,
+        )
+
+        print(
+            profile.failed_attempts,
+            profile.is_active,
+        )
+
+        await session.rollback()
+
+
+asyncio.run(test_failed_attempts())
+
+async def test_account_management_module():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_ACCOUNT_AUDIT_001",
+            full_name="Account Audit User",
+            email="account_audit@example.com",
+            phone_number="+918888888888",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        await deactivate_user_account(
+            session,
+            created.user_id,
+        )
+
+        await activate_user_account(
+            session,
+            created.user_id,
+        )
+
+        for _ in range(3):
+            await increment_failed_attempts(
+                session,
+                created.user_id,
+            )
+
+        profile = await reset_failed_attempts(
+            session,
+            created.user_id,
+        )
+
+        print("\n========== ACCOUNT MANAGEMENT ==========")
+        print(profile.user_id)
+        print(profile.failed_attempts)
+        print(profile.is_active)
+
+        logs = await crud.get_audit_logs_by_user_id(
+            session,
+            created.user_id,
+        )
+
+        actions = [log.event_type for log in logs]
+        print(actions)
+
+        await session.rollback()
+
+
+asyncio.run(test_account_management_module())

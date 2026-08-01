@@ -1003,6 +1003,178 @@ async def _log_account_activation(
         f"Account activation audit created for '{user.user_id}'.",
     )
 
+async def _log_account_deactivation(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record successful account deactivation.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"DEACTIVATE_{uuid4().hex}",
+        endpoint="/users/deactivate",
+        method="SYSTEM",
+        event_type="ACCOUNT_DEACTIVATED",
+        status="SUCCESS",
+        message=(
+            f"Account '{user.user_id}' deactivated."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Account deactivation audit created for '{user.user_id}'.",
+    )
+
+async def _log_failed_authentication(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record a failed authentication attempt.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"FAILED_AUTH_{uuid4().hex}",
+        endpoint="/users/authentication",
+        method="SYSTEM",
+        event_type="FAILED_AUTHENTICATION",
+        status="FAILED",
+        message=(
+            f"Failed authentication attempt "
+            f"({user.failed_attempts}) "
+            f"for user '{user.user_id}'."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Failed authentication audit created for '{user.user_id}'.",
+    )
+
+async def increment_failed_attempts(
+    session: AsyncSession,
+    user_id: str,
+    max_attempts: int = 5,
+) -> UserResponse:
+    """
+    Increment the failed authentication counter.
+
+    Automatically deactivates the account when the
+    configured threshold is reached.
+    """
+
+    if max_attempts < 1:
+        raise ValueError(
+            "max_attempts must be at least 1."
+        )
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    was_active = user.is_active
+
+    user = await crud.increment_failed_attempts(
+        session,
+        user,
+    )
+
+    if user.failed_attempts >= max_attempts and user.is_active:
+        user = await crud.deactivate_user(
+            session,
+            user,
+        )
+
+    await _log_failed_authentication(
+        session,
+        user,
+    )
+
+    if was_active and not user.is_active:
+        await _log_account_deactivation(
+            session,
+            user,
+        )
+
+        _log_account_operation(
+            "ACCOUNT_LOCKED",
+            user.user_id,
+        )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def reset_failed_attempts(
+    session: AsyncSession,
+    user_id: str,
+) -> UserResponse:
+    """
+    Reset the failed authentication counter.
+
+    Intended to be called after a successful
+    authentication.
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    if user.failed_attempts == 0:
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.reset_failed_attempts(
+        session,
+        user,
+    )
+
+    logger.info(
+        f"Failed authentication counter reset for '{user.user_id}'.",
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+def _log_account_operation(
+    operation: str,
+    user_id: str,
+) -> None:
+    """
+    Emit a standardized account-management log.
+
+    Centralizes logging for account lifecycle
+    and security operations.
+    """
+
+    logger.info(
+        f"Account operation '{operation}' completed "
+        f"for user '{user_id}'.",
+    )
+
 async def activate_user_account(
     session: AsyncSession,
     user_id: str,
@@ -1035,8 +1207,52 @@ async def activate_user_account(
         user,
     )
 
-    _log_profile_operation(
+    _log_account_operation(
         "ACCOUNT_ACTIVATED",
+        user.user_id,
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
+async def deactivate_user_account(
+    session: AsyncSession,
+    user_id: str,
+) -> UserResponse:
+    """
+    Deactivate a user's account.
+
+    This operation prevents future service
+    interactions until the account is
+    reactivated.
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    # Idempotent operation
+    if not user.is_active:
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.deactivate_user(
+        session,
+        user,
+    )
+
+    await _log_account_deactivation(
+        session,
+        user,
+    )
+
+    _log_account_operation(
+        "ACCOUNT_DEACTIVATED",
         user.user_id,
     )
 
