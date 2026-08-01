@@ -30,6 +30,7 @@ from app.services.user_service import (
     _normalize_optional_name,
     _validate_face_embedding,
     _validate_speaker_embedding,
+    activate_user_account,
     get_user_profile,
     get_user_profile_by_email,
     get_user_entity,
@@ -695,3 +696,52 @@ async def test_biometric_module():
 
 
 asyncio.run(test_biometric_module())
+
+async def test_account_activation():
+    async with AsyncSessionLocal() as session:
+
+        request = UserRegistrationRequest(
+            user_id="USR_ACTIVATION_001",
+            full_name="Activation User",
+            email="activation@example.com",
+            phone_number="+919111111110",
+            preferred_language="en",
+            speaker_embedding=[0.1] * 192,
+            face_embedding=[0.2] * 512,
+        )
+
+        created = await register_user(
+            session,
+            request,
+        )
+
+        user = await get_user_entity(
+            session,
+            created.user_id,
+        )
+
+        await crud.deactivate_user(
+            session,
+            user,
+        )
+
+        profile = await activate_user_account(
+            session,
+            created.user_id,
+        )
+
+        print("\n========== ACCOUNT ACTIVATION ==========")
+        print(profile.user_id)
+        print(profile.is_active)
+
+        logs = await crud.get_audit_logs_by_user_id(
+            session,
+            created.user_id,
+        )
+
+        print(logs[0].event_type)
+
+        await session.rollback()
+
+
+asyncio.run(test_account_activation())

@@ -972,6 +972,79 @@ def _log_biometric_operation(
         f"for user '{user_id}'.",
     )
 
+async def _log_account_activation(
+    session: AsyncSession,
+    user: User,
+) -> None:
+    """
+    Record successful account activation.
+    """
+
+    from app.database.models import AuditLog
+
+    audit = AuditLog(
+        user_id=user.user_id,
+        transaction_id=f"ACTIVATE_{uuid4().hex}",
+        endpoint="/users/activate",
+        method="SYSTEM",
+        event_type="ACCOUNT_ACTIVATED",
+        status="SUCCESS",
+        message=(
+            f"Account '{user.user_id}' activated."
+        ),
+    )
+
+    await crud.create_audit_log(
+        session,
+        audit,
+    )
+
+    logger.info(
+        f"Account activation audit created for '{user.user_id}'.",
+    )
+
+async def activate_user_account(
+    session: AsyncSession,
+    user_id: str,
+) -> UserResponse:
+    """
+    Activate a user's account.
+
+    This operation only changes the account
+    activation state.
+    """
+
+    user = await _get_user_by_id(
+        session,
+        user_id,
+    )
+
+    if user.is_active:
+        return UserResponse.model_validate(
+            user,
+            from_attributes=True,
+        )
+
+    user = await crud.activate_user(
+        session,
+        user,
+    )
+
+    await _log_account_activation(
+        session,
+        user,
+    )
+
+    _log_profile_operation(
+        "ACCOUNT_ACTIVATED",
+        user.user_id,
+    )
+
+    return UserResponse.model_validate(
+        user,
+        from_attributes=True,
+    )
+
 __all__ = [
     "UserServiceError",
     "UserAlreadyExistsError",
