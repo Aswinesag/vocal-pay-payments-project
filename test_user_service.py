@@ -900,3 +900,22 @@ async def test_account_management_module():
 
 
 asyncio.run(test_account_management_module())
+
+async def production_audit():
+    print("\n========== USER SERVICE PRODUCTION AUDIT ==========")
+
+    exported = [
+        name
+        for name in globals()
+        if callable(globals()[name])
+        and not name.startswith("_")
+    ]
+
+    exported.sort()
+
+    for name in exported:
+        print(name)
+
+    print("\nTotal Public Functions:", len(exported))
+
+asyncio.run(production_audit())
