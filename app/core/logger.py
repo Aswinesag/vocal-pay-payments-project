@@ -282,7 +282,21 @@ class ConsoleFormatter(logging.Formatter):
 
         return line
 
-        # ==========================================================
+
+class SafeConsoleHandler(logging.StreamHandler):
+    """Console handler resilient to closed or invalid streams."""
+
+    def handleError(self, record: logging.LogRecord) -> None:
+
+        error = sys.exc_info()[1]
+
+        if isinstance(error, (OSError, ValueError)):
+            return
+
+        super().handleError(record)
+
+
+# ==========================================================
 # Context Filter
 # ==========================================================
 
@@ -369,7 +383,7 @@ class LoggerManager:
 
     def _console_handler(self) -> logging.Handler:
 
-        handler = logging.StreamHandler(sys.stdout)
+        handler = SafeConsoleHandler(sys.stdout)
 
         handler.setFormatter(ConsoleFormatter())
 

@@ -8,11 +8,9 @@ authentication decisions, or perform transaction operations.
 """
 
 from __future__ import annotations
-
 from collections.abc import Mapping, Sized
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeAlias
-
+from typing import Final, Protocol, TypeAlias, runtime_checkable
 from app.core.logger import EnterpriseLogger, get_logger
 
 
@@ -63,7 +61,7 @@ class SpeakerVerificationResult:
 # ==========================================================
 # Provider Contract
 # ==========================================================
-
+@runtime_checkable
 class SpeakerVerificationProvider(Protocol):
     """Interface implemented by speaker verification backends."""
 
