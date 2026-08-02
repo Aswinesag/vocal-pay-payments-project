@@ -8,6 +8,8 @@ tested in later sections.
 """
 
 from __future__ import annotations
+import asyncio
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
 import torch
@@ -496,3 +498,258 @@ def test_similarity_clamped() -> None:
     )
 
     assert -1.0 <= similarity <= 1.0
+
+
+# ==========================================================
+# Production Provider Hardening
+# ==========================================================
+
+@pytest.mark.asyncio
+async def test_concurrent_model_initialization_loads_once() -> None:
+    provider = SpeechBrainProvider()
+    fake_model = MagicMock()
+
+    with patch(
+        "app.services.providers.speechbrain_provider."
+        "EncoderClassifier.from_hparams",
+        return_value=fake_model,
+    ) as mocked_loader:
+        await asyncio.gather(
+            *(provider._ensure_model_loaded() for _ in range(20))
+        )
+
+    mocked_loader.assert_called_once()
+    assert provider.initialized is True
+    assert provider._model is fake_model
+
+
+@pytest.mark.asyncio
+async def test_failed_initialization_can_be_retried() -> None:
+    provider = SpeechBrainProvider()
+    fake_model = MagicMock()
+
+    with patch(
+        "app.services.providers.speechbrain_provider."
+        "EncoderClassifier.from_hparams",
+        side_effect=[RuntimeError("unavailable"), fake_model],
+    ) as mocked_loader:
+        with pytest.raises(VoiceProviderError):
+            await provider._ensure_model_loaded()
+
+        assert provider.initialized is False
+        assert provider._model is None
+
+        await provider._ensure_model_loaded()
+
+    assert mocked_loader.call_count == 2
+    assert provider.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_model_loader_receives_provider_configuration() -> None:
+    cache_directory = Path.cwd()
+    provider = SpeechBrainProvider(
+        _model_source="test/model",
+        _model_cache=cache_directory,
+        _device="cpu",
+    )
+
+    with patch(
+        "app.services.providers.speechbrain_provider."
+        "EncoderClassifier.from_hparams",
+        return_value=MagicMock(),
+    ) as mocked_loader:
+        await provider._ensure_model_loaded()
+
+    mocked_loader.assert_called_once_with(
+        source="test/model",
+        savedir=str(cache_directory),
+        run_opts={"device": "cpu"},
+    )
+
+
+@pytest.mark.parametrize(
+    "configuration",
+    [
+        {"_model_source": ""},
+        {"_model_source": "   "},
+        {"_device": ""},
+        {"_device": "meta"},
+        {"_verification_threshold": True},
+        {"_verification_threshold": "0.75"},
+        {"_verification_threshold": float("nan")},
+        {"_verification_threshold": -1.01},
+        {"_verification_threshold": 1.01},
+    ],
+)
+def test_invalid_provider_configuration_rejected(
+    configuration: dict[str, object],
+) -> None:
+    with pytest.raises(VoiceValidationError):
+        SpeechBrainProvider(**configuration)
+
+
+def test_non_directory_model_cache_rejected() -> None:
+    with pytest.raises(VoiceValidationError):
+        SpeechBrainProvider(_model_cache=Path(__file__))
+
+
+def test_unavailable_cuda_configuration_rejected() -> None:
+    with patch.object(torch.cuda, "is_available", return_value=False):
+        with pytest.raises(VoiceValidationError, match="CUDA"):
+            SpeechBrainProvider(_device="cuda")
+
+
+@pytest.mark.asyncio
+async def test_embedding_extraction_uses_inference_mode() -> None:
+    provider = SpeechBrainProvider()
+    fake_model = MagicMock()
+    inference_states: list[bool] = []
+
+    def encode_batch(audio: torch.Tensor) -> torch.Tensor:
+        inference_states.append(torch.is_inference_mode_enabled())
+        assert audio.device.type == "cpu"
+        return torch.randn(1, 1, 192)
+
+    fake_model.encode_batch.side_effect = encode_batch
+
+    with patch(
+        "app.services.providers.speechbrain_provider."
+        "EncoderClassifier.from_hparams",
+        return_value=fake_model,
+    ):
+        await provider.extract_embedding(torch.randn(1, 16000))
+
+    assert inference_states == [True]
+
+
+@pytest.mark.asyncio
+async def test_audio_device_transfer_failure_is_wrapped() -> None:
+    provider = SpeechBrainProvider()
+    audio = torch.randn(1, 16000)
+
+    with (
+        patch(
+            "app.services.providers.speechbrain_provider."
+            "EncoderClassifier.from_hparams",
+            return_value=MagicMock(),
+        ),
+        patch.object(
+            torch.Tensor,
+            "to",
+            side_effect=RuntimeError("transfer failed"),
+        ),
+    ):
+        with pytest.raises(
+            VoiceProviderError,
+            match="transfer audio",
+        ):
+            await provider.extract_embedding(audio)
+
+
+def test_embedding_normalization_produces_unit_norm() -> None:
+    provider = SpeechBrainProvider()
+    embedding = torch.tensor([[[3.0, 4.0]]])
+
+    normalized = provider._normalize_embedding(embedding)
+
+    norm = torch.linalg.vector_norm(normalized, dim=-1)
+    assert torch.allclose(norm, torch.ones_like(norm))
+    assert torch.equal(embedding, torch.tensor([[[3.0, 4.0]]]))
+
+
+def test_similarity_uses_normalized_embeddings() -> None:
+    provider = SpeechBrainProvider()
+    enrolled = torch.tensor([[[10.0, 0.0]]])
+    same_direction = torch.tensor([[[2.0, 0.0]]])
+    opposite_direction = torch.tensor([[[-3.0, 0.0]]])
+
+    assert provider._compute_similarity(enrolled, same_direction) == pytest.approx(1.0)
+    assert provider._compute_similarity(enrolled, opposite_direction) == pytest.approx(-1.0)
+
+
+@pytest.mark.asyncio
+async def test_verification_uses_configured_threshold() -> None:
+    provider = SpeechBrainProvider(_verification_threshold=0.9)
+    embedding = torch.randn(1, 1, 192)
+
+    with patch.object(provider, "_compute_similarity", return_value=0.85):
+        result = await provider.verify_speaker(
+            enrolled_embedding=embedding,
+            live_embedding=embedding,
+        )
+
+    assert result.verified is False
+    assert result.metadata["threshold"] == 0.9
+
+
+@pytest.mark.asyncio
+async def test_verification_operational_metadata() -> None:
+    provider = SpeechBrainProvider()
+    model = MagicMock()
+    model.version = "model-2026.1"
+    provider._model = model
+    provider._initialized = True
+    embedding = torch.randn(1, 1, 192)
+
+    with patch.object(provider, "_compute_similarity", return_value=0.95):
+        result = await provider.verify_speaker(
+            enrolled_embedding=embedding,
+            live_embedding=embedding,
+        )
+
+    assert result.metadata == {
+        "threshold": 0.75,
+        "similarity": 0.95,
+        "provider_version": PROVIDER_VERSION,
+        "device": "cpu",
+        "model_source": "speechbrain/spkrec-ecapa-voxceleb",
+        "model_version": "model-2026.1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_shutdown_is_idempotent_and_allows_reinitialization() -> None:
+    provider = SpeechBrainProvider()
+    first_model = MagicMock()
+    second_model = MagicMock()
+
+    with patch(
+        "app.services.providers.speechbrain_provider."
+        "EncoderClassifier.from_hparams",
+        side_effect=[first_model, second_model],
+    ) as mocked_loader:
+        await provider._ensure_model_loaded()
+        await provider.shutdown()
+        await provider.shutdown()
+
+        assert provider.initialized is False
+        assert provider.model_loaded is False
+        assert provider._model is None
+
+        await provider._ensure_model_loaded()
+
+    assert mocked_loader.call_count == 2
+    assert provider.initialized is True
+    assert provider._model is second_model
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("enrolled", "live"),
+    [
+        (torch.empty(0), torch.randn(1, 1, 192)),
+        (torch.randn(1, 1, 192), torch.empty(0)),
+    ],
+)
+async def test_verification_rejects_empty_embeddings(
+    enrolled: torch.Tensor,
+    live: torch.Tensor,
+) -> None:
+    provider = SpeechBrainProvider()
+
+    with pytest.raises(VoiceValidationError, match="empty"):
+        await provider.verify_speaker(
+            enrolled_embedding=enrolled,
+            live_embedding=live,
+        )

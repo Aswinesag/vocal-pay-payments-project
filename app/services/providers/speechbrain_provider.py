@@ -11,6 +11,8 @@ Model loading and inference are implemented in
 later sections.
 """
 from __future__ import annotations
+import asyncio
+import math
 import torch
 from typing import TypeAlias
 from dataclasses import dataclass, field
@@ -97,6 +99,72 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         default=DEFAULT_MODEL_CACHE,
     )
 
+    _verification_threshold: float = field(
+        default=DEFAULT_VERIFICATION_THRESHOLD,
+    )
+
+    _initialization_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        init=False,
+        repr=False,
+    )
+
+    _inference_lock: asyncio.Lock = field(
+        default_factory=asyncio.Lock,
+        init=False,
+        repr=False,
+    )
+
+    def __post_init__(self) -> None:
+        """Validate provider configuration."""
+
+        if not isinstance(self._model_source, str) or not self._model_source.strip():
+            raise VoiceValidationError("Model source cannot be empty.")
+
+        if not isinstance(self._model_cache, Path):
+            raise VoiceValidationError("Model cache must be a pathlib.Path.")
+
+        try:
+            if self._model_cache.exists() and not self._model_cache.is_dir():
+                raise VoiceValidationError("Model cache must be a directory.")
+        except OSError as exc:
+            raise VoiceValidationError(
+                "Model cache path cannot be accessed."
+            ) from exc
+
+        if not isinstance(self._device, str) or not self._device.strip():
+            raise VoiceValidationError("Inference device cannot be empty.")
+
+        try:
+            device = torch.device(self._device)
+        except (RuntimeError, TypeError) as exc:
+            raise VoiceValidationError("Invalid inference device.") from exc
+
+        if device.type not in {"cpu", "cuda"}:
+            raise VoiceValidationError(
+                "Inference device must use CPU or CUDA."
+            )
+
+        if device.type == "cuda" and not torch.cuda.is_available():
+            raise VoiceValidationError("CUDA is not available.")
+
+        if isinstance(self._verification_threshold, bool) or not isinstance(
+            self._verification_threshold,
+            (int, float),
+        ):
+            raise VoiceValidationError(
+                "Similarity threshold must be numeric."
+            )
+
+        if not math.isfinite(self._verification_threshold) or not (
+            MIN_SIMILARITY_SCORE
+            <= self._verification_threshold
+            <= MAX_SIMILARITY_SCORE
+        ):
+            raise VoiceValidationError(
+                "Similarity threshold must be between -1.0 and 1.0."
+            )
+
     async def _ensure_model_loaded(self) -> None:
         """
         Lazily load the SpeechBrain model.
@@ -106,23 +174,52 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         """
 
         if self._initialized:
+            _log_voice_step(
+                "MODEL_INITIALIZATION",
+                outcome="SKIPPED",
+                provider=self.name,
+            )
             return
 
-        try:
-            self._model = EncoderClassifier.from_hparams(
-                source=self._model_source,
-                savedir=str(self._model_cache),
-                run_opts={
-                    "device": self._device,
-                },
+        async with self._initialization_lock:
+            if self._initialized:
+                _log_voice_step(
+                    "MODEL_INITIALIZATION",
+                    outcome="SKIPPED",
+                    provider=self.name,
+                )
+                return
+
+            _log_voice_operation(
+                "MODEL_INITIALIZATION_STARTED",
+                provider=self.name,
             )
 
-        except Exception as exc:
-            raise VoiceProviderError(
-                "Unable to initialize SpeechBrain model."
-            ) from exc
+            try:
+                self._model = EncoderClassifier.from_hparams(
+                    source=self._model_source,
+                    savedir=str(self._model_cache),
+                    run_opts={
+                        "device": self._device,
+                    },
+                )
 
-        self._initialized = True
+            except Exception as exc:
+                error = VoiceProviderError(
+                    "Unable to initialize SpeechBrain model."
+                )
+                _log_voice_failure(
+                    "MODEL_INITIALIZATION",
+                    error,
+                    provider=self.name,
+                )
+                raise error from exc
+
+            self._initialized = True
+            _log_voice_operation(
+                "MODEL_INITIALIZATION_COMPLETED",
+                provider=self.name,
+            )
 
     @property
     def name(self) -> str:
@@ -189,13 +286,17 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         )
 
         result = SpeakerVerificationResult(
-            verified=similarity >= DEFAULT_VERIFICATION_THRESHOLD,
+            verified=similarity >= self._verification_threshold,
             confidence=similarity,
             replay_detected=False,
             provider=self.name,
             metadata={
-                "threshold": DEFAULT_VERIFICATION_THRESHOLD,
+                "threshold": self._verification_threshold,
                 "similarity": similarity,
+                "provider_version": self.version,
+                "device": self._device,
+                "model_source": self._model_source,
+                "model_version": self._model_version,
             },
         )
 
@@ -206,59 +307,28 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
 
         return result
 
-    def _validate_audio(
-        self,
-        audio: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Validate audio before embedding extraction.
-        """
+    @property
+    def _model_version(self) -> str | None:
+        """Return provider-supplied model version metadata when available."""
 
-        if audio is None:
-            raise VoiceValidationError(
-                "Audio tensor cannot be None."
-            )
+        version = getattr(self._model, "version", None)
+        return version if isinstance(version, str) else None
 
-        if not isinstance(audio, torch.Tensor):
-            raise VoiceValidationError(
-                "Audio must be a torch.Tensor."
-            )
+    async def shutdown(self) -> None:
+        """Release provider resources safely and idempotently."""
 
-        if audio.numel() == 0:
-            raise VoiceValidationError(
-                "Audio tensor cannot be empty."
-            )
+        async with self._inference_lock:
+            async with self._initialization_lock:
+                self._model = None
+                self._initialized = False
 
-        return audio
+        if self._device.startswith("cuda") and torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    async def extract_embedding(
-        self,
-        audio: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Generate a speaker embedding using SpeechBrain.
-
-        This method is reusable for:
-
-        - user registration
-        - speaker verification
-        - profile updates
-        """
-
-        await self._ensure_model_loaded()
-
-        audio = self._validate_audio(audio)
-
-        try:
-            embedding = self._model.encode_batch(audio)
-
-        except Exception as exc:
-            raise VoiceProviderError(
-                "SpeechBrain failed to generate "
-                "speaker embedding."
-            ) from exc
-
-        return embedding
+        _log_voice_operation(
+            "PROVIDER_SHUTDOWN",
+            provider=self.name,
+        )
 
     def _validate_audio(
         self,
@@ -327,28 +397,50 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         • biometric updates
         """
 
-        await self._ensure_model_loaded()
-
         audio = self._validate_audio(audio)
 
-        _log_voice_operation(
-            "EMBEDDING_EXTRACTION_STARTED",
-            provider=self.name,
-        )
+        async with self._inference_lock:
+            await self._ensure_model_loaded()
 
-        try:
-            embedding = self._model.encode_batch(audio)
+            try:
+                device_audio = audio.to(self._device)
+            except Exception as exc:
+                error = VoiceProviderError(
+                    "Unable to transfer audio to the inference device."
+                )
+                _log_voice_failure(
+                    "AUDIO_DEVICE_TRANSFER",
+                    error,
+                    provider=self.name,
+                )
+                raise error from exc
 
-        except Exception as exc:
-            error = VoiceProviderError(
-                "SpeechBrain embedding extraction failed."
+            _log_voice_step(
+                "AUDIO_DEVICE_TRANSFER",
+                outcome="COMPLETED",
+                provider=self.name,
+                metadata={"device": self._device},
             )
-            _log_voice_failure(
-                "EMBEDDING_EXTRACTION",
-                error,
+
+            _log_voice_operation(
+                "EMBEDDING_EXTRACTION_STARTED",
                 provider=self.name,
             )
-            raise error from exc
+
+            try:
+                with torch.inference_mode():
+                    embedding = self._model.encode_batch(device_audio)
+
+            except Exception as exc:
+                error = VoiceProviderError(
+                    "SpeechBrain embedding extraction failed."
+                )
+                _log_voice_failure(
+                    "EMBEDDING_EXTRACTION",
+                    error,
+                    provider=self.name,
+                )
+                raise error from exc
 
         _log_voice_step(
             "EMBEDDING_EXTRACTION",
@@ -368,6 +460,39 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
 
         return embedding
 
+    def _normalize_embedding(
+        self,
+        embedding: SpeechBrainEmbedding,
+    ) -> SpeechBrainEmbedding:
+        """Normalize an embedding without changing the public representation."""
+
+        try:
+            device_embedding = embedding.to(self._device)
+            with torch.inference_mode():
+                normalized = torch.nn.functional.normalize(
+                    device_embedding,
+                    p=2.0,
+                    dim=-1,
+                )
+        except Exception as exc:
+            raise VoiceProviderError(
+                "Failed to normalize speaker embedding."
+            ) from exc
+
+        _log_voice_step(
+            "EMBEDDING_DEVICE_TRANSFER",
+            outcome="COMPLETED",
+            provider=self.name,
+            metadata={"device": self._device},
+        )
+        _log_voice_step(
+            "EMBEDDING_NORMALIZATION",
+            outcome="COMPLETED",
+            provider=self.name,
+            metadata={"device": self._device},
+        )
+        return normalized
+
     def _compute_similarity(
         self,
         enrolled_embedding: SpeechBrainEmbedding,
@@ -378,12 +503,18 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         """
 
         try:
-            similarity = torch.nn.functional.cosine_similarity(
-                enrolled_embedding,
-                live_embedding,
-                dim=-1,
+            normalized_enrolled = self._normalize_embedding(
+                enrolled_embedding
             )
-            score = float(similarity.mean().item())
+            normalized_live = self._normalize_embedding(live_embedding)
+
+            with torch.inference_mode():
+                similarity = torch.nn.functional.cosine_similarity(
+                    normalized_enrolled,
+                    normalized_live,
+                    dim=-1,
+                )
+                score = float(similarity.mean().item())
 
         except Exception as exc:
             raise VoiceProviderError(
