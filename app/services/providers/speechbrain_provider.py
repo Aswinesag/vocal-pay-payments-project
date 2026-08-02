@@ -50,7 +50,9 @@ PROVIDER_VERSION: Final[str] = "1.0"
 MODEL_NOT_INITIALIZED_MESSAGE: Final[str] = (
     "SpeechBrain model has not been initialized."
 )
-
+DEFAULT_VERIFICATION_THRESHOLD: Final[float] = 0.75
+MIN_SIMILARITY_SCORE: Final[float] = -1.0
+MAX_SIMILARITY_SCORE: Final[float] = 1.0
 # ==========================================================
 # SpeechBrain Provider
 # ==========================================================
@@ -153,19 +155,56 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         live_embedding: object,
     ) -> SpeakerVerificationResult:
         """
-        Perform speaker verification.
-
-        The actual implementation is introduced in
-        Section 4.4 after model loading and embedding
-        extraction are complete.
+        Verify a live embedding against an enrolled embedding.
         """
 
-        await self._ensure_model_loaded()
+        if not isinstance(enrolled_embedding, torch.Tensor):
+            raise VoiceValidationError(
+                "Enrolled embedding must be a torch.Tensor."
+            )
 
-        raise NotImplementedError(
-            "Speaker verification is implemented "
-            "in Section 4.4."
+        if enrolled_embedding.numel() == 0:
+            raise VoiceValidationError(
+                "Enrolled embedding cannot be empty."
+            )
+
+        if not isinstance(live_embedding, torch.Tensor):
+            raise VoiceValidationError(
+                "Live embedding must be a torch.Tensor."
+            )
+
+        if live_embedding.numel() == 0:
+            raise VoiceValidationError(
+                "Live embedding cannot be empty."
+            )
+
+        _log_voice_operation(
+            "VERIFICATION_STARTED",
+            provider=self.name,
         )
+
+        similarity = self._compute_similarity(
+            enrolled_embedding,
+            live_embedding,
+        )
+
+        result = SpeakerVerificationResult(
+            verified=similarity >= DEFAULT_VERIFICATION_THRESHOLD,
+            confidence=similarity,
+            replay_detected=False,
+            provider=self.name,
+            metadata={
+                "threshold": DEFAULT_VERIFICATION_THRESHOLD,
+                "similarity": similarity,
+            },
+        )
+
+        _log_voice_operation(
+            "VERIFICATION_COMPLETED",
+            provider=self.name,
+        )
+
+        return result
 
     def _validate_audio(
         self,
@@ -328,3 +367,33 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
         )
 
         return embedding
+
+    def _compute_similarity(
+        self,
+        enrolled_embedding: SpeechBrainEmbedding,
+        live_embedding: SpeechBrainEmbedding,
+    ) -> float:
+        """
+        Compute cosine similarity between two SpeechBrain embeddings.
+        """
+
+        try:
+            similarity = torch.nn.functional.cosine_similarity(
+                enrolled_embedding,
+                live_embedding,
+                dim=-1,
+            )
+            score = float(similarity.mean().item())
+
+        except Exception as exc:
+            raise VoiceProviderError(
+                "Failed to compute speaker similarity."
+            ) from exc
+
+        return max(
+            MIN_SIMILARITY_SCORE,
+            min(
+                MAX_SIMILARITY_SCORE,
+                score,
+            ),
+        )
