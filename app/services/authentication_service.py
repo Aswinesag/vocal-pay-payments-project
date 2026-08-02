@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, TypeAlias
+from typing import Final, Protocol, TypeAlias
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -257,6 +257,93 @@ async def _prepare_authentication_context(
     )
 
     return context
+
+
+# ==========================================================
+# Section 3 - Voice Authentication
+# ==========================================================
+
+VoiceAuthenticationPayload: TypeAlias: TypeAlias = bytes
+
+
+@dataclass(frozen=True, slots=True)
+class _VoiceAuthenticationResult:
+    """Immutable result produced by a voice verification provider."""
+
+    verified: bool
+    confidence: float
+    replay_detected: bool
+    provider: str
+    metadata: Mapping[str, object]
+
+
+class _VoiceServiceContract(Protocol):
+    """Contract required from a future voice verification service."""
+
+    async def verify_speaker(
+        self,
+        *,
+        enrolled_embedding: object,
+        voice_payload: VoiceAuthenticationPayload,
+        user_id: str,
+        request_id: str | None = None,
+    ) -> _VoiceAuthenticationResult:
+        """Verify a live voice payload against an enrolled profile."""
+        ...
+
+
+async def _authenticate_voice(
+    context: _ValidatedAuthenticationContext,
+    voice_payload: VoiceAuthenticationPayload,
+) -> _VoiceAuthenticationResult:
+    """Validate voice input and invoke the voice provider boundary."""
+
+    user_id = context.user.user_id
+
+    if not isinstance(voice_payload, bytes):
+        error = AuthenticationValidationError(
+            "Voice authentication payload must be bytes."
+        )
+        _log_authentication_failure(
+            "VOICE_PAYLOAD_VALIDATION",
+            error,
+            user_id=user_id,
+        )
+        raise error
+
+    if not voice_payload:
+        error = AuthenticationValidationError(
+            "Voice authentication payload cannot be empty."
+        )
+        _log_authentication_failure(
+            "VOICE_PAYLOAD_VALIDATION",
+            error,
+            user_id=user_id,
+        )
+        raise error
+
+    _log_authentication_step(
+        "VOICE_PAYLOAD_VALIDATION",
+        user_id=user_id,
+        outcome="VALIDATED",
+        metadata={
+            "payload_size_bytes": len(voice_payload),
+        },
+    )
+    _log_authentication_operation(
+        "VOICE_AUTHENTICATION_STARTED",
+        user_id,
+    )
+
+    error = AuthenticationDependencyError(
+        "Voice authentication provider is unavailable."
+    )
+    _log_authentication_failure(
+        "VOICE_PROVIDER_INVOCATION",
+        error,
+        user_id=user_id,
+    )
+    raise error
 
 
 __all__ = [
