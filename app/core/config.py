@@ -195,6 +195,10 @@ class Settings(BaseSettings):
 
     SPEAKER_SIMILARITY_THRESHOLD: float = Field(...)
 
+    SPEAKER_VERIFICATION_PROVIDER: str = Field(
+        default="SpeechBrain"
+    )
+
     # ======================================================
     # SpeechBrain ECAPA-TDNN
     # ======================================================
