@@ -9,6 +9,7 @@ tested in later sections.
 
 from __future__ import annotations
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 import pytest
@@ -17,6 +18,11 @@ from app.services.providers.speechbrain_provider import (
     PROVIDER_NAME,
     PROVIDER_VERSION,
     SpeechBrainProvider,
+)
+import app.services.providers.provider_factory as provider_factory
+from app.services.providers import (
+    get_speaker_verification_provider,
+    shutdown_speaker_verification_providers,
 )
 from app.services.voice_service import (
     SpeakerVerificationProvider,
@@ -753,3 +759,144 @@ async def test_verification_rejects_empty_embeddings(
             enrolled_embedding=enrolled,
             live_embedding=live,
         )
+
+
+# ==========================================================
+# Section 5 Audit - Provider Factory & Production Wrap-up
+# ==========================================================
+
+@pytest.fixture
+def clean_provider_factory(monkeypatch: pytest.MonkeyPatch):
+    """Isolate the singleton cache and provider configuration."""
+
+    provider_factory._provider_instances.clear()
+    monkeypatch.setattr(
+        provider_factory.settings,
+        "SPEAKER_VERIFICATION_PROVIDER",
+        provider_factory.DEFAULT_SPEAKER_PROVIDER,
+    )
+
+    yield
+
+    provider_factory._provider_instances.clear()
+
+
+def test_section_5_public_api_is_stable() -> None:
+    import app.services.providers as providers
+
+    assert providers.__all__ == (
+        "get_speaker_verification_provider",
+        "shutdown_speaker_verification_providers",
+    )
+    assert callable(get_speaker_verification_provider)
+    assert callable(shutdown_speaker_verification_providers)
+
+
+def test_section_5_registry_contains_speechbrain() -> None:
+    assert "speechbrain" in provider_factory._provider_registry
+    assert (
+        provider_factory._provider_display_names["speechbrain"]
+        == PROVIDER_NAME
+    )
+
+
+def test_section_5_default_factory_selection(
+    clean_provider_factory: None,
+) -> None:
+    provider = get_speaker_verification_provider()
+
+    assert isinstance(provider, SpeechBrainProvider)
+    assert isinstance(provider, SpeakerVerificationProvider)
+
+
+def test_section_5_explicit_factory_selection_is_case_insensitive(
+    clean_provider_factory: None,
+) -> None:
+    provider = get_speaker_verification_provider("sPeEcHbRaIn")
+
+    assert isinstance(provider, SpeechBrainProvider)
+
+
+def test_section_5_factory_returns_singleton(
+    clean_provider_factory: None,
+) -> None:
+    first = get_speaker_verification_provider()
+    second = get_speaker_verification_provider(PROVIDER_NAME)
+
+    assert first is second
+
+
+def test_section_5_concurrent_factory_retrieval_is_singleton(
+    clean_provider_factory: None,
+) -> None:
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        providers = list(
+            executor.map(
+                lambda _: get_speaker_verification_provider(),
+                range(100),
+            )
+        )
+
+    assert len({id(provider) for provider in providers}) == 1
+
+
+def test_section_5_unknown_explicit_provider_rejected(
+    clean_provider_factory: None,
+) -> None:
+    with pytest.raises(VoiceProviderError, match="Unknown"):
+        get_speaker_verification_provider("UnavailableProvider")
+
+
+def test_section_5_unknown_configured_provider_rejected(
+    clean_provider_factory: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        provider_factory.settings,
+        "SPEAKER_VERIFICATION_PROVIDER",
+        "UnavailableProvider",
+    )
+
+    with pytest.raises(VoiceProviderError, match="Unknown"):
+        get_speaker_verification_provider()
+
+
+@pytest.mark.asyncio
+async def test_section_5_shutdown_skips_uninitialized_provider(
+    clean_provider_factory: None,
+) -> None:
+    provider = get_speaker_verification_provider()
+
+    await shutdown_speaker_verification_providers()
+
+    assert isinstance(provider, SpeechBrainProvider)
+    assert provider.initialized is False
+    assert provider_factory._provider_instances == {}
+
+
+@pytest.mark.asyncio
+async def test_section_5_shutdown_initialized_provider(
+    clean_provider_factory: None,
+) -> None:
+    provider = get_speaker_verification_provider()
+    assert isinstance(provider, SpeechBrainProvider)
+    provider._model = object()
+    provider._initialized = True
+
+    await shutdown_speaker_verification_providers()
+
+    assert provider._model is None
+    assert provider.initialized is False
+    assert provider_factory._provider_instances == {}
+
+
+@pytest.mark.asyncio
+async def test_section_5_registry_reusable_after_shutdown(
+    clean_provider_factory: None,
+) -> None:
+    first = get_speaker_verification_provider()
+    await shutdown_speaker_verification_providers()
+    second = get_speaker_verification_provider()
+
+    assert first is not second
+    assert isinstance(second, SpeechBrainProvider)
