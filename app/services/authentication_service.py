@@ -12,7 +12,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Final, Protocol, TypeAlias
+from datetime import datetime, timezone
+from types import MappingProxyType
+from typing import Final, Protocol, TypeAlias, runtime_checkable
+from uuid import uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,11 +28,12 @@ from app.database.models import User
 # ==========================================================
 
 from app.services import user_service
-
-# from app.services import voice_service
-# from app.services import face_service
-# from app.services import challenge_service
-# from app.services import fraud_detection_service
+from app.services.providers import get_speaker_verification_provider
+from app.services.voice_service import (
+    SpeakerVerificationResult,
+    VoiceServiceError,
+    VoiceValidationError,
+)
 
 
 # ==========================================================
@@ -263,46 +267,45 @@ async def _prepare_authentication_context(
 # Section 3 - Voice Authentication
 # ==========================================================
 
-VoiceAuthenticationPayload: TypeAlias: TypeAlias = bytes
+VoiceAuthenticationPayload: TypeAlias = object
+FaceAuthenticationPayload: TypeAlias = object
+ChallengePayload: TypeAlias = str
 
 
-@dataclass(frozen=True, slots=True)
-class _VoiceAuthenticationResult:
-    """Immutable result produced by a voice verification provider."""
+@runtime_checkable
+class _VoiceProviderContract(Protocol):
+    """Voice-provider capabilities required by this orchestrator."""
 
-    verified: bool
-    confidence: float
-    replay_detected: bool
-    provider: str
-    metadata: Mapping[str, object]
+    @property
+    def name(self) -> str:
+        """Return the provider name."""
+        ...
 
-
-class _VoiceServiceContract(Protocol):
-    """Contract required from a future voice verification service."""
+    async def extract_embedding(self, audio: object) -> object:
+        """Extract an embedding from live audio."""
+        ...
 
     async def verify_speaker(
         self,
         *,
         enrolled_embedding: object,
-        voice_payload: VoiceAuthenticationPayload,
-        user_id: str,
-        request_id: str | None = None,
-    ) -> _VoiceAuthenticationResult:
-        """Verify a live voice payload against an enrolled profile."""
+        live_embedding: object,
+    ) -> SpeakerVerificationResult:
+        """Verify a live embedding against an enrolled profile."""
         ...
 
 
 async def _authenticate_voice(
     context: _ValidatedAuthenticationContext,
     voice_payload: VoiceAuthenticationPayload,
-) -> _VoiceAuthenticationResult:
+) -> SpeakerVerificationResult:
     """Validate voice input and invoke the voice provider boundary."""
 
     user_id = context.user.user_id
 
-    if not isinstance(voice_payload, bytes):
+    if voice_payload is None:
         error = AuthenticationValidationError(
-            "Voice authentication payload must be bytes."
+            "Voice authentication payload cannot be None."
         )
         _log_authentication_failure(
             "VOICE_PAYLOAD_VALIDATION",
@@ -311,7 +314,18 @@ async def _authenticate_voice(
         )
         raise error
 
-    if not voice_payload:
+    if isinstance(voice_payload, (str, int, float, bool)):
+        error = AuthenticationValidationError(
+            "Voice authentication payload type is invalid."
+        )
+        _log_authentication_failure(
+            "VOICE_PAYLOAD_VALIDATION",
+            error,
+            user_id=user_id,
+        )
+        raise error
+
+    if isinstance(voice_payload, (bytes, bytearray, memoryview)) and not voice_payload:
         error = AuthenticationValidationError(
             "Voice authentication payload cannot be empty."
         )
@@ -327,7 +341,7 @@ async def _authenticate_voice(
         user_id=user_id,
         outcome="VALIDATED",
         metadata={
-            "payload_size_bytes": len(voice_payload),
+            "payload_type": type(voice_payload).__name__,
         },
     )
     _log_authentication_operation(
@@ -335,20 +349,377 @@ async def _authenticate_voice(
         user_id,
     )
 
-    error = AuthenticationDependencyError(
-        "Voice authentication provider is unavailable."
-    )
-    _log_authentication_failure(
-        "VOICE_PROVIDER_INVOCATION",
-        error,
+    try:
+        provider = get_speaker_verification_provider()
+        if not isinstance(provider, _VoiceProviderContract):
+            raise AuthenticationDependencyError(
+                "Voice authentication provider contract is incomplete."
+            )
+
+        _log_authentication_step(
+            "VOICE_PROVIDER_SELECTION",
+            user_id=user_id,
+            outcome="SELECTED",
+            metadata={"provider": provider.name},
+        )
+
+        live_embedding = await provider.extract_embedding(voice_payload)
+        _log_authentication_step(
+            "VOICE_EMBEDDING_EXTRACTION",
+            user_id=user_id,
+            outcome="COMPLETED",
+            metadata={"provider": provider.name},
+        )
+
+        result = await provider.verify_speaker(
+            enrolled_embedding=context.speaker_embedding,
+            live_embedding=live_embedding,
+        )
+
+    except AuthenticationServiceError:
+        raise
+    except VoiceValidationError as exc:
+        error = AuthenticationValidationError(str(exc))
+        _log_authentication_failure(
+            "VOICE_AUTHENTICATION",
+            error,
+            user_id=user_id,
+        )
+        raise error from exc
+    except VoiceServiceError as exc:
+        error = AuthenticationDependencyError(
+            "Voice authentication dependency failed."
+        )
+        _log_authentication_failure(
+            "VOICE_AUTHENTICATION",
+            error,
+            user_id=user_id,
+        )
+        raise error from exc
+    except Exception as exc:
+        error = AuthenticationDependencyError(
+            "Voice authentication provider is unavailable."
+        )
+        _log_authentication_failure(
+            "VOICE_AUTHENTICATION",
+            error,
+            user_id=user_id,
+        )
+        raise error from exc
+
+    _log_authentication_step(
+        "SPEAKER_VERIFICATION",
         user_id=user_id,
+        outcome="COMPLETED",
+        metadata={"provider": result.provider},
     )
-    raise error
+    return result
+
+
+# ==========================================================
+# Section 4 - Face Authentication
+# ==========================================================
+
+@dataclass(frozen=True, slots=True)
+class FaceAuthenticationResult:
+    """Immutable result returned by a face-verification provider."""
+
+    verified: bool
+    confidence: float
+    provider: str
+    metadata: Mapping[str, object]
+
+
+@runtime_checkable
+class FaceAuthenticationProvider(Protocol):
+    """Boundary for a future face-verification implementation."""
+
+    @property
+    def name(self) -> str:
+        """Return the provider name."""
+        ...
+
+    async def verify_face(
+        self,
+        *,
+        enrolled_embedding: object,
+        live_payload: FaceAuthenticationPayload,
+    ) -> FaceAuthenticationResult:
+        """Verify live face input against an enrolled profile."""
+        ...
+
+
+async def _authenticate_face(
+    context: _ValidatedAuthenticationContext,
+    face_payload: FaceAuthenticationPayload,
+    provider: FaceAuthenticationProvider | None,
+) -> FaceAuthenticationResult:
+    """Validate face input and delegate verification to a provider."""
+
+    user_id = context.user.user_id
+    if face_payload is None or (
+        isinstance(face_payload, (bytes, bytearray, memoryview))
+        and not face_payload
+    ):
+        raise AuthenticationValidationError(
+            "Face authentication payload cannot be empty."
+        )
+    if isinstance(face_payload, (str, int, float, bool)):
+        raise AuthenticationValidationError(
+            "Face authentication payload type is invalid."
+        )
+    if provider is None:
+        raise AuthenticationDependencyError(
+            "Face authentication provider is unavailable."
+        )
+
+    _log_authentication_operation("FACE_AUTHENTICATION_STARTED", user_id)
+    try:
+        result = await provider.verify_face(
+            enrolled_embedding=context.face_embedding,
+            live_payload=face_payload,
+        )
+    except AuthenticationServiceError:
+        raise
+    except Exception as exc:
+        error = AuthenticationDependencyError(
+            "Face authentication dependency failed."
+        )
+        _log_authentication_failure("FACE_AUTHENTICATION", error, user_id=user_id)
+        raise error from exc
+
+    _log_authentication_step(
+        "FACE_VERIFICATION",
+        user_id=user_id,
+        outcome="COMPLETED",
+        metadata={"provider": result.provider},
+    )
+    return result
+
+
+# ==========================================================
+# Sections 5-8 - Workflow, Challenge, Session, Result
+# ==========================================================
+
+@dataclass(frozen=True, slots=True)
+class ChallengeAuthenticationResult:
+    """Immutable result returned by a challenge provider."""
+
+    verified: bool
+    provider: str
+    metadata: Mapping[str, object]
+
+
+class ChallengeAuthenticationProvider(Protocol):
+    """Boundary for future dynamic-challenge orchestration."""
+
+    async def validate_response(
+        self,
+        *,
+        user_id: str,
+        challenge: ChallengePayload,
+        response: ChallengePayload,
+        request_id: str,
+    ) -> ChallengeAuthenticationResult:
+        """Validate a response to a previously issued challenge."""
+        ...
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticationSession:
+    """In-memory state associated with one authentication request."""
+
+    request_id: str
+    user_id: str
+    started_at: datetime
+    metadata: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticationResult:
+    """Immutable multimodal authentication orchestration result."""
+
+    request_id: str
+    user_id: str
+    authenticated: bool
+    voice_result: SpeakerVerificationResult
+    face_result: FaceAuthenticationResult
+    started_at: datetime
+    completed_at: datetime
+    metadata: Mapping[str, object]
+
+
+def _create_authentication_session(
+    user_id: str,
+    *,
+    request_id: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> AuthenticationSession:
+    """Create immutable in-memory authentication session state."""
+
+    if not isinstance(user_id, str) or not user_id.strip():
+        raise AuthenticationValidationError("User ID cannot be empty.")
+
+    return AuthenticationSession(
+        request_id=request_id or str(uuid4()),
+        user_id=user_id.strip(),
+        started_at=datetime.now(timezone.utc),
+        metadata=MappingProxyType(dict(metadata or {})),
+    )
+
+
+async def _authenticate_challenge(
+    session: AuthenticationSession,
+    challenge: ChallengePayload,
+    response: ChallengePayload,
+    provider: ChallengeAuthenticationProvider | None,
+) -> ChallengeAuthenticationResult:
+    """Delegate challenge-response validation to its provider boundary."""
+
+    if not isinstance(challenge, str) or not challenge.strip():
+        raise AuthenticationValidationError("Challenge cannot be empty.")
+    if not isinstance(response, str) or not response.strip():
+        raise AuthenticationValidationError("Challenge response cannot be empty.")
+    if provider is None:
+        raise AuthenticationDependencyError(
+            "Challenge authentication provider is unavailable."
+        )
+
+    try:
+        return await provider.validate_response(
+            user_id=session.user_id,
+            challenge=challenge,
+            response=response,
+            request_id=session.request_id,
+        )
+    except AuthenticationServiceError:
+        raise
+    except Exception as exc:
+        error = AuthenticationDependencyError(
+            "Challenge authentication dependency failed."
+        )
+        _log_authentication_failure(
+            "CHALLENGE_AUTHENTICATION",
+            error,
+            user_id=session.user_id,
+        )
+        raise error from exc
+
+
+# ==========================================================
+# Section 9 - Public Service API
+# ==========================================================
+
+async def authenticate_voice(
+    session: AsyncSession,
+    user_id: str,
+    voice_payload: VoiceAuthenticationPayload,
+    *,
+    request_id: str | None = None,
+) -> SpeakerVerificationResult:
+    """Validate a user and orchestrate voice authentication."""
+
+    context = await _prepare_authentication_context(session, user_id)
+    context = _ValidatedAuthenticationContext(
+        user=context.user,
+        speaker_embedding=context.speaker_embedding,
+        face_embedding=context.face_embedding,
+        request_id=request_id,
+    )
+    return await _authenticate_voice(context, voice_payload)
+
+
+async def authenticate_face(
+    session: AsyncSession,
+    user_id: str,
+    face_payload: FaceAuthenticationPayload,
+    *,
+    provider: FaceAuthenticationProvider | None = None,
+    request_id: str | None = None,
+) -> FaceAuthenticationResult:
+    """Validate a user and orchestrate face authentication."""
+
+    context = await _prepare_authentication_context(session, user_id)
+    context = _ValidatedAuthenticationContext(
+        user=context.user,
+        speaker_embedding=context.speaker_embedding,
+        face_embedding=context.face_embedding,
+        request_id=request_id,
+    )
+    return await _authenticate_face(context, face_payload, provider)
+
+
+async def authenticate_multimodal(
+    session: AsyncSession,
+    user_id: str,
+    voice_payload: VoiceAuthenticationPayload,
+    face_payload: FaceAuthenticationPayload,
+    *,
+    face_provider: FaceAuthenticationProvider | None = None,
+    request_id: str | None = None,
+    metadata: Mapping[str, object] | None = None,
+) -> AuthenticationResult:
+    """Orchestrate voice and face verification for one validated user."""
+
+    auth_session = _create_authentication_session(
+        user_id,
+        request_id=request_id,
+        metadata=metadata,
+    )
+    context = await _prepare_authentication_context(session, user_id)
+    context = _ValidatedAuthenticationContext(
+        user=context.user,
+        speaker_embedding=context.speaker_embedding,
+        face_embedding=context.face_embedding,
+        request_id=auth_session.request_id,
+    )
+
+    voice_result = await _authenticate_voice(context, voice_payload)
+    face_result = await _authenticate_face(context, face_payload, face_provider)
+    result = AuthenticationResult(
+        request_id=auth_session.request_id,
+        user_id=context.user.user_id,
+        authenticated=voice_result.verified and face_result.verified,
+        voice_result=voice_result,
+        face_result=face_result,
+        started_at=auth_session.started_at,
+        completed_at=datetime.now(timezone.utc),
+        metadata=auth_session.metadata,
+    )
+    _log_authentication_operation("AUTHENTICATION_COMPLETED", result.user_id)
+    return result
+
+
+async def authenticate_challenge(
+    auth_session: AuthenticationSession,
+    challenge: ChallengePayload,
+    response: ChallengePayload,
+    *,
+    provider: ChallengeAuthenticationProvider | None = None,
+) -> ChallengeAuthenticationResult:
+    """Orchestrate dynamic challenge-response validation."""
+
+    return await _authenticate_challenge(
+        auth_session,
+        challenge,
+        response,
+        provider,
+    )
 
 
 __all__ = [
     "AUTHENTICATION_COMPONENT",
+    "AuthenticationResult",
+    "AuthenticationSession",
     "AuthenticationDependencyError",
     "AuthenticationServiceError",
     "AuthenticationValidationError",
+    "ChallengeAuthenticationProvider",
+    "ChallengeAuthenticationResult",
+    "FaceAuthenticationProvider",
+    "FaceAuthenticationResult",
+    "authenticate_challenge",
+    "authenticate_face",
+    "authenticate_multimodal",
+    "authenticate_voice",
 ]
