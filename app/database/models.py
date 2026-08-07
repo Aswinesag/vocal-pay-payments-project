@@ -30,10 +30,6 @@ from sqlalchemy.orm import (
 )
 from sqlalchemy.types import TypeDecorator
 from app.database.database import Base
-from app.core.constants import (
-    RiskLevel,
-    TransactionStatus,
-)
 
 # ==========================================================
 # Timestamp Mixin
