@@ -12,10 +12,8 @@ Multimodal Biometrics and Agentic AI Fraud Detection
 """
 
 from __future__ import annotations
-
 from pathlib import Path
 from typing import List
-
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -205,21 +203,49 @@ class Settings(BaseSettings):
 
     SPEAKER_MODEL: str = Field(...)
 
-    # ------------------------------------------------------
+    # ---------------------------------------------------------
     # Face Recognition
-    # ------------------------------------------------------
+    # ---------------------------------------------------------
 
-    INSIGHTFACE_DEVICE: str = Field(...)
+    INSIGHTFACE_DEVICE: str = Field(
+        default="CPU",
+    )
 
-    FACE_SIMILARITY_THRESHOLD: float = Field(...)
+    INSIGHTFACE_MODEL_PATH: str = Field(
+        default="buffalo_l",
+    )
 
-    FACE_MODEL_NAME: str = Field(...)
+    INSIGHTFACE_VERIFICATION_THRESHOLD: float = Field(
+        default=0.65,
+    )
 
-    FACE_PROVIDER: str = Field(...)
+    FACE_VERIFICATION_PROVIDER: str = Field(
+        default="InsightFace",
+    )
 
-    FACE_DET_WIDTH: int = Field(...)
+    FACE_MODEL_NAME: str = Field(
+        default="buffalo_l",
+    )
 
-    FACE_DET_HEIGHT: int = Field(...)
+    FACE_SIMILARITY_THRESHOLD: float = Field(
+        default=0.65,
+    )
+
+    FACE_DET_DEVICE: str = Field(
+        default="CPU",
+    )
+
+    FACE_DET_MODEL_PATH: str = Field(
+        default="retinaface_r50_v1",
+    )
+
+    FACE_DET_WIDTH: int = Field(
+        default=640,
+    )
+
+    FACE_DET_HEIGHT: int = Field(
+        default=640,
+    )
 
     # ------------------------------------------------------
     # Face Liveness Detection
