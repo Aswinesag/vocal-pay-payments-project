@@ -290,6 +290,12 @@ class PendingTransaction(
         nullable=False,
     )
 
+    is_active: Mapped[bool] = mapped_column(
+        Boolean,
+        default=True,
+        nullable=False,
+    )
+
     # ------------------------------------------------------
     # Verification
     # ------------------------------------------------------

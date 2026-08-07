@@ -274,6 +274,8 @@ class PendingOTPResponse(APIResponse):
         default="PENDING_OTP",
     )
 
+    is_active: bool = True
+
     expires_at: datetime
 
     verification_method: str = Field(
@@ -290,6 +292,8 @@ class PendingChallengeResponse(APIResponse):
     status: str = Field(
         default="PENDING_CHALLENGE",
     )
+
+    is_active: bool = True
 
     challenge_phrase: str
 

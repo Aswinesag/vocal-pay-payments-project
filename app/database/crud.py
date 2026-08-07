@@ -1,20 +1,21 @@
 from __future__ import annotations
-from datetime import datetime, timezone
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import TypeVar
+from uuid import uuid4
+
+from loguru import logger
 from sqlalchemy import select
 from sqlalchemy import delete
 from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.core.logger import system_logger
-from app.database.database import get_db_session as _get_db_session
 from app.database.models import (
     AuditLog,
     FraudEvent,
     PendingTransaction,
     Transaction,
     User,
+    utc_now_naive,
 )
 from app.database.schemas import UserRegistrationRequest
 
@@ -40,7 +41,6 @@ TransactionModelType = TypeVar(
 )
 
 DBSession = AsyncSession
-get_db_session = _get_db_session
 
 # ==========================================================
 # Utility Helpers
@@ -48,10 +48,10 @@ get_db_session = _get_db_session
 
 def utc_now() -> datetime:
     """
-    Returns timezone-aware UTC datetime.
+    Return the centralized UTC-naive persistence timestamp.
     """
 
-    return datetime.now(timezone.utc)
+    return utc_now_naive()
 
 async def get_by_id(
     db: DBSession,
@@ -95,21 +95,17 @@ async def safe_flush(db: DBSession) -> None:
         await db.flush()
 
     except IntegrityError as exc:
-        system_logger.error(
-            "Database integrity violation during flush.",
-            extra={
-                "error": str(exc),
-            },
+        await db.rollback()
+        logger.bind(error=str(exc)).error(
+            "Database integrity violation during flush."
         )
 
         raise
 
     except SQLAlchemyError as exc:
-        system_logger.error(
-            "Database operation failed during flush.",
-            extra={
-                "error": str(exc),
-            },
+        await db.rollback()
+        logger.bind(error=str(exc)).error(
+            "Database operation failed during flush."
         )
 
         raise
@@ -402,6 +398,104 @@ async def create_pending_transaction(
     await safe_flush(session)
 
     return pending
+
+
+async def freeze_transaction(
+    db: AsyncSession,
+    user_id: str,
+    amount: float,
+    status: str,
+    verification_secret: str,
+) -> PendingTransaction:
+    """Persist an active step-up transaction with a strict five-minute TTL."""
+    now = utc_now_naive()
+    pending = PendingTransaction(
+        transaction_id=f"TXN-{uuid4().hex.upper()}",
+        user_id=user_id,
+        amount=amount,
+        status=status,
+        verification_secret=verification_secret,
+        expires_at=now + timedelta(minutes=5),
+        is_active=True,
+        risk_level="PENDING",
+        speaker_score=0.0,
+        face_score=0.0,
+        fraud_score=0.0,
+        replay_attack=False,
+    )
+
+    try:
+        db.add(pending)
+        await db.flush()
+        logger.bind(
+            transaction_id=pending.transaction_id,
+            user_id=user_id,
+            expires_at=pending.expires_at.isoformat(),
+        ).info("Step-up transaction frozen.")
+        return pending
+    except Exception as exc:
+        await db.rollback()
+        logger.bind(user_id=user_id, error=str(exc)).exception(
+            "Failed to freeze step-up transaction."
+        )
+        raise
+
+
+async def get_active_transaction(
+    db: AsyncSession,
+    verification_secret: str,
+) -> PendingTransaction | None:
+    """Return an unexpired active step-up transaction for a secret."""
+    try:
+        pending = await db.scalar(
+            select(PendingTransaction).where(
+                PendingTransaction.verification_secret == verification_secret,
+                PendingTransaction.is_active.is_(True),
+            )
+        )
+
+        if pending is None:
+            logger.debug("No active step-up transaction found.")
+            return None
+
+        if pending.expires_at <= utc_now_naive():
+            pending.is_active = False
+            await db.flush()
+            logger.bind(transaction_id=pending.transaction_id).warning(
+                "Expired step-up transaction deactivated."
+            )
+            return None
+
+        logger.bind(transaction_id=pending.transaction_id).debug(
+            "Active step-up transaction retrieved."
+        )
+        return pending
+    except Exception as exc:
+        await db.rollback()
+        logger.bind(error=str(exc)).exception(
+            "Failed to retrieve active step-up transaction."
+        )
+        raise
+
+
+async def invalidate_transaction(
+    db: AsyncSession,
+    transaction: PendingTransaction,
+) -> None:
+    """Permanently deactivate a consumed step-up verification token."""
+    try:
+        transaction.is_active = False
+        await db.flush()
+        logger.bind(transaction_id=transaction.transaction_id).info(
+            "Step-up transaction invalidated."
+        )
+    except Exception as exc:
+        await db.rollback()
+        logger.bind(
+            transaction_id=transaction.transaction_id,
+            error=str(exc),
+        ).exception("Failed to invalidate step-up transaction.")
+        raise
 
 async def get_pending_transaction_by_transaction_id(
     session: AsyncSession,
