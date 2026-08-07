@@ -1,205 +1,185 @@
-"""Concrete InsightFace provider for in-memory face verification."""
+"""CUDA-bound InsightFace facial verification provider."""
 
 from __future__ import annotations
 
-import asyncio
-from collections.abc import Sequence
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Final
+from threading import RLock
+from time import perf_counter
+from typing import ClassVar
 
 import numpy as np
 from insightface.app import FaceAnalysis
+from loguru import logger
 
+from app.core.config import settings
 from app.services.face_service import (
     FaceDetection,
-    FaceEmbedding,
     FaceProviderError,
     FaceVerificationProvider,
     FaceVerificationResult,
 )
 
 
-DEFAULT_PROVIDER_NAME: Final[str] = "InsightFace"
-DEFAULT_MODEL_NAME: Final[str] = "buffalo_l"
-DEFAULT_DEVICE: Final[str] = "CPU"
-DEFAULT_DETECTION_SIZE: Final[tuple[int, int]] = (640, 640)
-DEFAULT_MODEL_CACHE: Final[Path] = (
-    Path.home() / ".cache" / "vocalpay" / "insightface"
-)
-DEFAULT_VERIFICATION_THRESHOLD: Final[float] = 0.65
-
-
-@dataclass(slots=True)
 class InsightFaceProvider(FaceVerificationProvider):
-    """InsightFace-based face verification provider."""
+    """Thread-safe CUDA-only InsightFace verification provider."""
 
-    _initialized: bool = field(default=False, init=False)
-    _version: str = field(default="1.0", init=False)
-    _device: str = DEFAULT_DEVICE
-    _model_name: str = DEFAULT_MODEL_NAME
-    _model_cache: Path = field(default=DEFAULT_MODEL_CACHE)
-    _detection_size: tuple[int, int] = field(
-        default=DEFAULT_DETECTION_SIZE
-    )
-    _app: FaceAnalysis | None = field(
-        default=None,
-        init=False,
-        repr=False,
-    )
-    _lock: asyncio.Lock = field(
-        default_factory=asyncio.Lock,
-        init=False,
-        repr=False,
-    )
+    _model: ClassVar[FaceAnalysis | None] = None
+    _model_lock: ClassVar[RLock] = RLock()
+
+    def __init__(
+        self,
+        _device: str = "cuda",
+        _model_name: str | None = None,
+    ) -> None:
+        if _device.strip().casefold() != "cuda":
+            raise ValueError("InsightFace must execute on CUDA.")
+        if settings.INSIGHTFACE_PROVIDER != "CUDAExecutionProvider":
+            raise ValueError("InsightFace requires CUDAExecutionProvider.")
+
+        self._model_name = _model_name or settings.INSIGHTFACE_MODEL
+        self._app = self._get_model()
+
+    def _get_model(self) -> FaceAnalysis:
+        """Load and prepare the process-wide CUDA model exactly once."""
+        cls = type(self)
+        if cls._model is not None:
+            return cls._model
+
+        with cls._model_lock:
+            if cls._model is not None:
+                return cls._model
+
+            started_at = perf_counter()
+            logger.info("InsightFace CUDA model loading started.")
+            try:
+                model = FaceAnalysis(
+                    name=settings.INSIGHTFACE_MODEL,
+                    providers=["CUDAExecutionProvider"],
+                )
+                model.prepare(ctx_id=0, det_size=(640, 640))
+            except Exception as exc:
+                logger.bind(error=str(exc)).exception(
+                    "InsightFace CUDA model loading failed."
+                )
+                raise FaceProviderError(
+                    "InsightFace CUDA model could not be initialized."
+                ) from exc
+
+            cls._model = model
+            logger.bind(
+                latency_ms=round((perf_counter() - started_at) * 1000.0, 2),
+                provider="CUDAExecutionProvider",
+            ).info("InsightFace CUDA model loaded.")
+            return model
 
     @property
     def name(self) -> str:
-        """Return the stable provider name."""
-
-        return DEFAULT_PROVIDER_NAME
+        """Return the provider display name."""
+        return "InsightFace"
 
     @property
     def version(self) -> str:
         """Return the provider implementation version."""
-
-        return self._version
+        return "1.0"
 
     @property
     def initialized(self) -> bool:
-        """Return whether model initialization completed."""
-
-        return self._initialized
+        """Return whether the shared CUDA model is loaded."""
+        return type(self)._model is not None
 
     @property
     def model_loaded(self) -> bool:
-        """Return whether a model application is available."""
+        """Return whether the shared CUDA model is available."""
+        return type(self)._model is not None
 
-        return self._app is not None
-
-    async def _ensure_model_loaded(self) -> None:
-        """Lazily initialize the InsightFace model exactly once."""
-
-        if self._initialized:
-            return
-
-        async with self._lock:
-            if self._initialized:
-                return
-
-            try:
-                self._model_cache.mkdir(parents=True, exist_ok=True)
-                app = FaceAnalysis(
-                    name=self._model_name,
-                    root=str(self._model_cache),
-                )
-                app.prepare(
-                    ctx_id=0 if self._device.upper() == "CUDA" else -1,
-                    det_size=self._detection_size,
-                )
-            except Exception as exc:
-                raise FaceProviderError(
-                    "Failed to initialize InsightFace model."
-                ) from exc
-
-            self._app = app
-            self._initialized = True
-
-    def _validate_detected_faces(
+    def extract_embedding(
         self,
-        faces: Sequence[object],
-    ) -> object:
-        """Require exactly one detected face and return it."""
-
-        if not faces:
-            raise FaceProviderError(
-                "No face detected in the supplied image."
-            )
-        if len(faces) > 1:
-            raise FaceProviderError(
-                "Multiple faces detected. Exactly one face is required."
-            )
-        return faces[0]
-
-    async def detect_faces(
-        self,
+        img_matrix: np.ndarray | None = None,
         *,
-        image: object,
-    ) -> tuple[FaceDetection, ...]:
-        """Detect faces and expose only portable rendering metadata."""
-
-        await self._ensure_model_loaded()
-        if image is None:
-            raise FaceProviderError("Input image cannot be None.")
-        if self._app is None:
-            raise FaceProviderError(
-                "InsightFace model is not initialized."
-            )
-
+        image: np.ndarray | None = None,
+    ) -> list[float]:
+        """Extract the normalized embedding of the largest centered face."""
+        started_at = perf_counter()
         try:
-            faces = self._app.get(image)
-            detections: list[FaceDetection] = []
-            for face in faces:
-                bounding_box = np.asarray(face.bbox, dtype=np.float32)
-                if bounding_box.size != 4:
-                    raise FaceProviderError(
-                        "Detected face has an invalid bounding box."
-                    )
+            matrix = img_matrix if img_matrix is not None else image
+            if not isinstance(matrix, np.ndarray) or matrix.ndim != 3:
+                raise ValueError("Face input must be a BGR image matrix.")
+            if matrix.size == 0:
+                raise ValueError("Face input image cannot be empty.")
 
-                raw_landmarks = getattr(face, "kps", None)
-                landmarks: tuple[tuple[float, float], ...] = ()
-                if raw_landmarks is not None:
-                    landmark_array = np.asarray(
-                        raw_landmarks,
-                        dtype=np.float32,
-                    ).reshape(-1, 2)
-                    landmarks = tuple(
-                        (float(point[0]), float(point[1]))
-                        for point in landmark_array
-                    )
+            faces = self._app.get(np.ascontiguousarray(matrix))
+            if not faces:
+                raise ValueError("No face detected in the supplied image.")
 
-                detections.append(
-                    FaceDetection(
-                        bounding_box=tuple(
-                            float(value) for value in bounding_box
-                        ),
-                        landmarks=landmarks,
-                    )
-                )
-            return tuple(detections)
-        except FaceProviderError:
+            image_height, image_width = matrix.shape[:2]
+            center_x = image_width / 2.0
+            center_y = image_height / 2.0
+
+            def selection_score(face: object) -> float:
+                bbox = np.asarray(getattr(face, "bbox"), dtype=np.float32)
+                width = max(0.0, float(bbox[2] - bbox[0]))
+                height = max(0.0, float(bbox[3] - bbox[1]))
+                area = width * height
+                face_x = float(bbox[0] + bbox[2]) / 2.0
+                face_y = float(bbox[1] + bbox[3]) / 2.0
+                distance = np.hypot(face_x - center_x, face_y - center_y)
+                return area / (1.0 + float(distance))
+
+            primary_face = max(faces, key=selection_score)
+            embedding = np.asarray(
+                getattr(primary_face, "normed_embedding"),
+                dtype=np.float32,
+            ).reshape(-1)
+            if embedding.size == 0 or not np.isfinite(embedding).all():
+                raise FaceProviderError("InsightFace returned an invalid embedding.")
+
+            result = [float(value) for value in embedding]
+            logger.bind(
+                latency_ms=round((perf_counter() - started_at) * 1000.0, 2),
+                dimensions=len(result),
+                detected_faces=len(faces),
+            ).info("InsightFace embedding extraction completed.")
+            return result
+        except (ValueError, FaceProviderError):
             raise
         except Exception as exc:
-            raise FaceProviderError("Face detection failed.") from exc
-
-    async def extract_embedding(
-        self,
-        *,
-        image: object,
-    ) -> FaceEmbedding:
-        """Extract one face embedding from an input image."""
-
-        await self._ensure_model_loaded()
-        if image is None:
-            raise FaceProviderError("Input image cannot be None.")
-        if self._app is None:
-            raise FaceProviderError(
-                "InsightFace model is not initialized."
+            logger.bind(error=str(exc)).exception(
+                "InsightFace embedding extraction failed."
             )
+            raise FaceProviderError("Face embedding extraction failed.") from exc
 
+    def calculate_similarity(
+        self,
+        embedding_a: list[float],
+        embedding_b: list[float],
+    ) -> float:
+        """Return normalized cosine similarity within the inclusive 0–1 range."""
+        started_at = perf_counter()
         try:
-            faces = self._app.get(image)
-            face = self._validate_detected_faces(faces)
-            embedding = np.asarray(face.embedding, dtype=np.float32)
-            if embedding.size == 0:
-                raise FaceProviderError("Generated embedding is empty.")
-            return embedding
-        except FaceProviderError:
+            vector_a = np.asarray(embedding_a, dtype=np.float32).reshape(-1)
+            vector_b = np.asarray(embedding_b, dtype=np.float32).reshape(-1)
+            if vector_a.size == 0 or vector_a.shape != vector_b.shape:
+                raise ValueError("Face embeddings must have matching dimensions.")
+            if not np.isfinite(vector_a).all() or not np.isfinite(vector_b).all():
+                raise ValueError("Face embeddings contain non-finite values.")
+
+            denominator = float(np.linalg.norm(vector_a) * np.linalg.norm(vector_b))
+            if denominator == 0.0:
+                raise ValueError("Face embeddings cannot have zero norm.")
+
+            cosine = float(np.dot(vector_a, vector_b) / denominator)
+            similarity = float(np.clip((cosine + 1.0) / 2.0, 0.0, 1.0))
+            logger.bind(
+                latency_ms=round((perf_counter() - started_at) * 1000.0, 2),
+                similarity=round(similarity, 6),
+            ).info("Face cosine similarity calculated.")
+            return similarity
+        except (ValueError, FaceProviderError):
             raise
         except Exception as exc:
-            raise FaceProviderError(
-                "Failed to extract face embedding."
-            ) from exc
+            logger.bind(error=str(exc)).exception(
+                "Face cosine similarity calculation failed."
+            )
+            raise FaceProviderError("Face similarity calculation failed.") from exc
 
     async def verify_face(
         self,
@@ -207,52 +187,34 @@ class InsightFaceProvider(FaceVerificationProvider):
         enrolled_embedding: object,
         live_embedding: object,
     ) -> FaceVerificationResult:
-        """Compare enrolled and live face embeddings."""
-
-        await self._ensure_model_loaded()
-        try:
-            enrolled = np.asarray(enrolled_embedding, dtype=np.float32)
-            live = np.asarray(live_embedding, dtype=np.float32)
-        except Exception as exc:
-            raise FaceProviderError("Invalid face embeddings.") from exc
-
-        if enrolled.size == 0 or live.size == 0:
-            raise FaceProviderError("Face embeddings cannot be empty.")
-        if enrolled.shape != live.shape:
-            raise FaceProviderError("Embedding dimensions do not match.")
-
-        enrolled_norm = float(np.linalg.norm(enrolled))
-        live_norm = float(np.linalg.norm(live))
-        if enrolled_norm == 0.0 or live_norm == 0.0:
-            raise FaceProviderError("Face embeddings cannot have zero norm.")
-
-        similarity = float(
-            np.dot(enrolled, live) / (enrolled_norm * live_norm)
-        )
-        similarity = max(-1.0, min(1.0, similarity))
-        confidence = (similarity + 1.0) / 2.0
-
+        """Verify a live face embedding against its enrolled reference."""
+        enrolled = np.asarray(enrolled_embedding, dtype=np.float32).reshape(-1).tolist()
+        live = np.asarray(live_embedding, dtype=np.float32).reshape(-1).tolist()
+        confidence = self.calculate_similarity(enrolled, live)
         return FaceVerificationResult(
-            verified=confidence >= DEFAULT_VERIFICATION_THRESHOLD,
+            verified=confidence >= settings.FACE_PASS_THRESHOLD,
             confidence=confidence,
             face_detected=True,
             liveness_checked=False,
             provider=self.name,
-            metadata={
-                "similarity": similarity,
-                "threshold": DEFAULT_VERIFICATION_THRESHOLD,
-            },
+            metadata={"provider": "CUDAExecutionProvider", "device": "cuda"},
+        )
+
+    async def detect_faces(self, *, image: object) -> tuple[FaceDetection, ...]:
+        """Return portable bounding boxes and landmarks for detected faces."""
+        matrix = np.asarray(image)
+        faces = self._app.get(matrix)
+        return tuple(
+            FaceDetection(
+                bounding_box=tuple(float(value) for value in face.bbox),
+                landmarks=tuple(
+                    (float(point[0]), float(point[1]))
+                    for point in np.asarray(getattr(face, "kps", ()))
+                ),
+            )
+            for face in faces
         )
 
     async def shutdown(self) -> None:
-        """
-        Release all provider resources.
-
-        InsightFace itself does not expose an explicit shutdown API,
-        therefore we simply release references to allow Python's
-        garbage collector to reclaim memory.
-        """
-
-        async with self._lock:
-            self._app = None
-            self._initialized = False
+        """Retain the process-wide CUDA singleton until process termination."""
+        logger.info("InsightFace CUDA singleton retained for process lifetime.")
