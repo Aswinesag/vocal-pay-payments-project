@@ -130,6 +130,7 @@ def test_public_api_exports() -> None:
     from app.services.face_service import __all__
 
     expected = {
+        "FaceDetection",
         "FaceEmbedding",
         "FaceEmbeddingPair",
         "FaceVerificationProvider",

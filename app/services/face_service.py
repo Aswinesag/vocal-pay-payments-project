@@ -99,6 +99,14 @@ class FaceVerificationResult:
     provider: str
     metadata: Mapping[str, object]
 
+
+@dataclass(frozen=True, slots=True)
+class FaceDetection:
+    """Provider-independent face location for diagnostic rendering."""
+
+    bounding_box: tuple[float, float, float, float]
+    landmarks: tuple[tuple[float, float], ...]
+
 class FaceVerificationProvider(Protocol):
     """Interface implemented by face verification backends."""
 
@@ -111,6 +119,14 @@ class FaceVerificationProvider(Protocol):
         *,
         image: object,
     ) -> object:
+        ...
+
+    async def detect_faces(
+        self,
+        *,
+        image: object,
+    ) -> tuple[FaceDetection, ...]:
+        """Return detected face locations without exposing provider internals."""
         ...
 
     async def verify_face(
@@ -432,6 +448,7 @@ async def _verify_face(
     return result
 
 __all__ = [
+    "FaceDetection",
     "FaceEmbedding",
     "FaceEmbeddingPair",
     "FaceVerificationProvider",

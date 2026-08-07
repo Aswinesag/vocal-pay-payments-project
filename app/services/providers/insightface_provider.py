@@ -12,6 +12,7 @@ import numpy as np
 from insightface.app import FaceAnalysis
 
 from app.services.face_service import (
+    FaceDetection,
     FaceEmbedding,
     FaceProviderError,
     FaceVerificationProvider,
@@ -119,6 +120,57 @@ class InsightFaceProvider(FaceVerificationProvider):
                 "Multiple faces detected. Exactly one face is required."
             )
         return faces[0]
+
+    async def detect_faces(
+        self,
+        *,
+        image: object,
+    ) -> tuple[FaceDetection, ...]:
+        """Detect faces and expose only portable rendering metadata."""
+
+        await self._ensure_model_loaded()
+        if image is None:
+            raise FaceProviderError("Input image cannot be None.")
+        if self._app is None:
+            raise FaceProviderError(
+                "InsightFace model is not initialized."
+            )
+
+        try:
+            faces = self._app.get(image)
+            detections: list[FaceDetection] = []
+            for face in faces:
+                bounding_box = np.asarray(face.bbox, dtype=np.float32)
+                if bounding_box.size != 4:
+                    raise FaceProviderError(
+                        "Detected face has an invalid bounding box."
+                    )
+
+                raw_landmarks = getattr(face, "kps", None)
+                landmarks: tuple[tuple[float, float], ...] = ()
+                if raw_landmarks is not None:
+                    landmark_array = np.asarray(
+                        raw_landmarks,
+                        dtype=np.float32,
+                    ).reshape(-1, 2)
+                    landmarks = tuple(
+                        (float(point[0]), float(point[1]))
+                        for point in landmark_array
+                    )
+
+                detections.append(
+                    FaceDetection(
+                        bounding_box=tuple(
+                            float(value) for value in bounding_box
+                        ),
+                        landmarks=landmarks,
+                    )
+                )
+            return tuple(detections)
+        except FaceProviderError:
+            raise
+        except Exception as exc:
+            raise FaceProviderError("Face detection failed.") from exc
 
     async def extract_embedding(
         self,
