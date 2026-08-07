@@ -27,6 +27,9 @@ class Settings(BaseSettings):
         default="VocalPay Core Backend Engine",
         min_length=1,
     )
+    LOG_LEVEL: str = Field(default="INFO", min_length=1)
+    LOG_DIRECTORY: str = Field(default="logs", min_length=1)
+    LOG_ROTATION: str = Field(default="10 MB", min_length=1)
     DATABASE_URL: str = Field(
         default="sqlite+aiosqlite:///./vocalpay.db",
         pattern=r"^sqlite\+aiosqlite:///",
