@@ -72,3 +72,13 @@ Thumbs.db
 .vscode/
 *.code-workspace
 *.log
+
+# Local virtual environment variants
+venv311/
+
+# Runtime SQLite structural tracking extensions
+*.db-wal
+*.db-shm
+
+# Operational logging artifacts
+logs/audit.json
