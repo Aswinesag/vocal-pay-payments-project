@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
 
 from app.api.v1.endpoints.transaction import router as transaction_router
+from app.api.v1.endpoints.user import router as user_router
 from app.core.config import settings
 from app.core.constants import PROJECT_VERSION
 from app.database.database import close_database, initialize_database
@@ -61,6 +62,7 @@ app.add_middleware(
 )
 
 app.include_router(transaction_router, prefix="/api/v1")
+app.include_router(user_router, prefix="/api/v1")
 
 
 @app.get("/", response_model=dict[str, str])
