@@ -1,13 +1,21 @@
 from __future__ import annotations
-from datetime import datetime
-from typing import Any
+from datetime import datetime, timezone
+from typing import Annotated, Any, Optional
+
+from fastapi import File, UploadFile
 from pydantic import (
+    AwareDatetime,
     BaseModel,
     ConfigDict,
     EmailStr,
     Field,
 )
 from pydantic import field_validator
+
+
+def utc_now_aware() -> datetime:
+    """Return the current timezone-aware UTC instant."""
+    return datetime.now(timezone.utc)
 
 
 # ==========================================================
@@ -40,9 +48,15 @@ class APIResponse(BaseSchema):
 
     message: str
 
-    timestamp: datetime = Field(
-        default_factory=datetime.utcnow,
+    timestamp: AwareDatetime = Field(
+        default_factory=utc_now_aware,
     )
+
+    @field_validator("timestamp")
+    @classmethod
+    def normalize_timestamp(cls, value: datetime) -> datetime:
+        """Normalize a validated timezone-aware timestamp to UTC."""
+        return value.astimezone(timezone.utc)
 
 class ErrorResponse(APIResponse):
     """
@@ -184,7 +198,7 @@ class UserResponse(UserBase):
 
 class TransactionInitiateRequest(BaseSchema):
     """
-    Initial transaction request.
+    Metadata submitted when initiating a transaction.
     """
 
     amount: float = Field(
@@ -205,21 +219,19 @@ class TransactionInitiateRequest(BaseSchema):
         examples=["android_pixel_7"],
     )
 
-    audio_duration_seconds: float = Field(
-        gt=0,
-        le=10,
-        examples=[4.2],
-    )
 
-    audio_size_mb: float = Field(
-        gt=0,
-        le=5,
-        examples=[1.8],
-    )
+class TransactionInitiateFiles(BaseSchema):
+    """Raw biometric files supplied through multipart form data."""
 
-    has_face_snapshot: bool = Field(
-        default=True,
-    )
+    audio_file: Annotated[
+        UploadFile,
+        File(description="Raw voice sample for transaction verification."),
+    ]
+
+    image_file: Annotated[
+        UploadFile,
+        File(description="Raw face image for transaction verification."),
+    ]
 
 class RiskAssessmentResponse(BaseSchema):
     """
@@ -585,8 +597,8 @@ class LedgerResponse(APIResponse):
 
     closing_balance: float | None = None
 
-    generated_at: datetime = Field(
-        default_factory=datetime.utcnow,
+    generated_at: AwareDatetime = Field(
+        default_factory=utc_now_aware,
     )
 
 class TransactionHistoryQuery(BaseSchema):
@@ -713,7 +725,7 @@ class AuditLogResponse(BaseSchema):
 
     id: int
 
-    transaction_id: str
+    transaction_id: Optional[str] = None
 
     user_id: str | None = None
 

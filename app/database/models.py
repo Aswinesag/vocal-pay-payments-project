@@ -9,6 +9,8 @@ application.
 
 from __future__ import annotations
 from datetime import datetime, timezone
+from typing import Optional
+
 from sqlalchemy import (
     JSON,
     Boolean,
@@ -20,11 +22,13 @@ from sqlalchemy import (
     String,
     Text,
 )
+from sqlalchemy.engine import Dialect
 from sqlalchemy.orm import (
     Mapped,
     mapped_column,
     relationship,
 )
+from sqlalchemy.types import TypeDecorator
 from app.database.database import Base
 from app.core.constants import (
     RiskLevel,
@@ -35,21 +39,54 @@ from app.core.constants import (
 # Timestamp Mixin
 # ==========================================================
 
+class UTCNaiveDateTime(TypeDecorator[datetime]):
+    """Persist datetimes as UTC-naive values for SQLite consistency."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(
+        self,
+        value: datetime | None,
+        dialect: Dialect,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(
+        self,
+        value: datetime | None,
+        dialect: Dialect,
+    ) -> datetime | None:
+        if value is None:
+            return None
+        if value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+
+def utc_now_naive() -> datetime:
+    """Return the current UTC instant without timezone offset metadata."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
 class TimestampMixin:
     """
     Automatically tracks creation and update timestamps.
     """
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        UTCNaiveDateTime(),
+        default=utc_now_naive,
         nullable=False,
     )
 
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
-        onupdate=lambda: datetime.now(timezone.utc),
+        UTCNaiveDateTime(),
+        default=utc_now_naive,
+        onupdate=utc_now_naive,
         nullable=False,
     )
 
@@ -198,7 +235,7 @@ class User(
     )
 
     last_login_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True),
+        UTCNaiveDateTime(),
         nullable=True,
     )
 
@@ -263,7 +300,7 @@ class PendingTransaction(
     )
 
     expires_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
+        UTCNaiveDateTime(),
         nullable=False,
     )
 
@@ -506,7 +543,6 @@ class FraudEvent(
 class AuditLog(
     Base,
     PrimaryKeyMixin,
-    TransactionIDMixin,
     TimestampMixin,
 ):
     """
@@ -517,11 +553,17 @@ class AuditLog(
     __table_args__ = (
         Index("idx_audit_event", "event_type"),
         Index("idx_audit_status", "status"),
+        Index("idx_audit_transaction_id", "transaction_id"),
     )
 
     # ------------------------------------------------------
     # Request Context
     # ------------------------------------------------------
+
+    transaction_id: Mapped[Optional[str]] = mapped_column(
+        String(64),
+        nullable=True,
+    )
 
     user_id: Mapped[str | None] = mapped_column(
         String(64),
