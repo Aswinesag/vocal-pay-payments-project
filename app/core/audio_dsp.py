@@ -7,7 +7,9 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from app.core.config import settings
+
+ROLLOFF_THRESHOLD = 4800.0
+CENTROID_THRESHOLD = 2700.0
 
 
 def detect_replay_attack(audio_path: str) -> bool:
@@ -40,6 +42,6 @@ def detect_replay_attack(audio_path: str) -> bool:
     mean_centroid = float(np.mean(spectral_centroid))
 
     return (
-        mean_rolloff >= settings.ROLLOFF_THRESHOLD
-        and mean_centroid >= settings.CENTROID_THRESHOLD
+        mean_rolloff >= ROLLOFF_THRESHOLD
+        and mean_centroid >= CENTROID_THRESHOLD
     )

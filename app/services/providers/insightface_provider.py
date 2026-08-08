@@ -30,8 +30,6 @@ class InsightFaceProvider(FaceVerificationProvider):
         _device: str = "cuda",
         _model_name: str | None = None,
     ) -> None:
-        if _device.strip().casefold() != "cuda":
-            raise ValueError("InsightFace must execute on CUDA.")
         if settings.INSIGHTFACE_PROVIDER != "CUDAExecutionProvider":
             raise ValueError("InsightFace requires CUDAExecutionProvider.")
 
@@ -53,7 +51,10 @@ class InsightFaceProvider(FaceVerificationProvider):
             try:
                 model = FaceAnalysis(
                     name=settings.INSIGHTFACE_MODEL,
-                    providers=["CUDAExecutionProvider"],
+                    providers=[
+                        "CUDAExecutionProvider",
+                        "CPUExecutionProvider",
+                    ],
                 )
                 model.prepare(ctx_id=0, det_size=(640, 640))
             except Exception as exc:

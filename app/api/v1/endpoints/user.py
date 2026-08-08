@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+import traceback
 from typing import Annotated
 
-import numpy as np
-import torch
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel, ConfigDict, EmailStr
@@ -65,59 +64,68 @@ async def enroll_user(
                 detail="User ID, email, or phone number is already enrolled.",
             )
 
+        audio_content = await audio_file.read()
+        photo_content = await photo_file.read()
+        if not audio_content:
+            raise ValueError("Audio upload cannot be empty.")
+        if not photo_content:
+            raise ValueError("Photo upload cannot be empty.")
+        await audio_file.seek(0)
+        await photo_file.seek(0)
+
         waveform = await async_upload_to_waveform(audio_file)
         image = await async_upload_to_numpy(photo_file)
 
         face_provider = get_face_verification_provider()
-        face_embedding_raw = await face_provider.extract_embedding(image=image)
-        face_embedding = np.asarray(
-            face_embedding_raw,
-            dtype=np.float32,
-        ).reshape(-1)
+        face_result = await face_provider.extract_embedding(image=image)
+        pure_face_list = [float(val) for val in getattr(face_result, "flatten", lambda: face_result)()]
 
         voice_provider = get_speaker_verification_provider()
-        voice_tensor = torch.from_numpy(waveform).unsqueeze(0)
-        voice_embedding_raw = await voice_provider.extract_embedding(voice_tensor)
-        if isinstance(voice_embedding_raw, torch.Tensor):
-            speaker_embedding = (
-                voice_embedding_raw.detach().cpu().float().reshape(-1).tolist()
-            )
-        else:
-            speaker_embedding = np.asarray(
-                voice_embedding_raw,
-                dtype=np.float32,
-            ).reshape(-1).tolist()
-
-        face_embedding_list = face_embedding.tolist()
-        if not face_embedding_list or not speaker_embedding:
+        voice_result = await voice_provider.extract_embedding(waveform)
+        pure_voice_list = [float(val) for val in getattr(voice_result, "flatten", lambda: voice_result)()]
+        if not pure_face_list or not pure_voice_list:
             raise ValueError("Biometric provider returned an empty embedding.")
 
-        user = User(
+        new_user = User(
             user_id=user_id,
             full_name=full_name,
             email=str(email),
             phone_number=phone_number,
-            speaker_embedding=speaker_embedding,
-            face_embedding=face_embedding_list,
+            speaker_embedding=pure_voice_list,
+            face_embedding=pure_face_list,
             is_active=True,
             is_verified=True,
             failed_attempts=0,
             preferred_language="en",
         )
-        db.add(user)
-        await db.commit()
+        try:
+            db.add(new_user)
+            await db.commit()
+        except Exception as exc:
+            await db.rollback()
+            logger.bind(
+                user_id=user_id,
+                error=str(exc),
+                traceback=traceback.format_exc(),
+            ).error(
+                "Enrollment commit failed."
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Enrollment database serialization or commit failed.",
+            ) from exc
 
         logger.bind(
             user_id=user_id,
-            face_dimensions=len(face_embedding_list),
-            speaker_dimensions=len(speaker_embedding),
+            face_dimensions=len(pure_face_list),
+            speaker_dimensions=len(pure_voice_list),
         ).info("User biometric enrollment completed.")
 
         return EnrollmentResponse(
             success=True,
             user_id=user_id,
-            face_embedding_dimensions=len(face_embedding_list),
-            speaker_embedding_dimensions=len(speaker_embedding),
+            face_embedding_dimensions=len(pure_face_list),
+            speaker_embedding_dimensions=len(pure_voice_list),
         )
     except HTTPException:
         await db.rollback()

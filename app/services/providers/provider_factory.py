@@ -14,7 +14,6 @@ from loguru import logger
 
 from app.core.config import settings
 from app.core.inference_coordinator import isolate_model_inference
-from app.core.memory_manager import optimize_hardware_memory
 from app.services.face_service import FaceVerificationProvider
 from app.services.providers.insightface_provider import InsightFaceProvider
 from app.services.providers.speechbrain_provider import SpeechBrainProvider
@@ -113,42 +112,27 @@ class BiometricInferenceProxy:
             **_vram_telemetry(),
         ).debug("Biometric inference waiting for global lock.")
 
-        try:
-            async with isolate_model_inference(self._provider_tag):
-                await self._initialize_locked()
-                started_at = perf_counter()
-                logger.bind(
-                    provider=self._provider_tag,
-                    operation=method_name,
-                    **_vram_telemetry(),
-                ).info("Biometric inference lock acquired.")
+        async with isolate_model_inference(self._provider_tag):
+            await self._initialize_locked()
+            started_at = perf_counter()
+            logger.bind(
+                provider=self._provider_tag,
+                operation=method_name,
+                **_vram_telemetry(),
+            ).info("Biometric inference lock acquired.")
 
-                if inspect.iscoroutinefunction(method):
-                    result = await method(*args, **kwargs)
-                else:
-                    result = await asyncio.to_thread(method, *args, **kwargs)
+            if inspect.iscoroutinefunction(method):
+                result = await method(*args, **kwargs)
+            else:
+                result = await asyncio.to_thread(method, *args, **kwargs)
 
-                logger.bind(
-                    provider=self._provider_tag,
-                    operation=method_name,
-                    execution_seconds=perf_counter() - started_at,
-                    **_vram_telemetry(),
-                ).info("Biometric inference completed.")
-                return result
-        finally:
-            try:
-                memory_metrics = await optimize_hardware_memory()
-                logger.bind(
-                    provider=self._provider_tag,
-                    operation=method_name,
-                    **memory_metrics,
-                ).info("Post-inference hardware memory cleanup completed.")
-            except Exception as cleanup_error:
-                logger.bind(
-                    provider=self._provider_tag,
-                    operation=method_name,
-                    error=str(cleanup_error),
-                ).exception("Post-inference hardware memory cleanup failed.")
+            logger.bind(
+                provider=self._provider_tag,
+                operation=method_name,
+                execution_seconds=perf_counter() - started_at,
+                **_vram_telemetry(),
+            ).info("Biometric inference completed.")
+            return result
 
     async def extract_embedding(
         self,

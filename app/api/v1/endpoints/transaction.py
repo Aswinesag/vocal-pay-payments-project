@@ -9,7 +9,6 @@ from typing import Annotated, Any
 
 import cv2
 import numpy as np
-import torch
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
@@ -79,9 +78,7 @@ async def initiate_transaction(
         await audio_file.seek(0)
         waveform = await async_upload_to_waveform(audio_file)
         voice_provider = get_speaker_verification_provider()
-        live_embedding = await voice_provider.extract_embedding(
-            torch.from_numpy(waveform).unsqueeze(0)
-        )
+        live_embedding = await voice_provider.extract_embedding(waveform)
         voice_result: Any = await voice_provider.verify_speaker(
             enrolled_embedding=user.speaker_embedding,
             live_embedding=live_embedding,

@@ -23,7 +23,7 @@ from app.services.voice_service import (
 class SpeechBrainProvider(SpeakerVerificationProvider):
     """Thread-safe CPU-only ECAPA-TDNN speaker verification provider."""
 
-    _model_source: ClassVar[str] = "speechbrain/spkrec-ecapa-tdnn"
+    _model_source: ClassVar[str] = "speechbrain/spkrec-ecapa-voxceleb"
     _model: ClassVar[EncoderClassifier | None] = None
     _model_lock: ClassVar[RLock] = RLock()
 

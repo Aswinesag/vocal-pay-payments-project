@@ -5,14 +5,17 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from loguru import logger
+from starlette.middleware.base import RequestResponseEndpoint
+from starlette.responses import Response
 
 from app.api.v1.endpoints.transaction import router as transaction_router
 from app.api.v1.endpoints.user import router as user_router
 from app.core.config import settings
 from app.core.constants import PROJECT_VERSION
+from app.core.memory_manager import optimize_hardware_memory
 from app.database.database import close_database, initialize_database
 
 
@@ -60,6 +63,21 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def schedule_memory_optimization(
+    request: Request,
+    call_next: RequestResponseEndpoint,
+) -> Response:
+    """Schedule hardware memory optimization after response delivery."""
+    response = await call_next(request)
+    background_tasks = BackgroundTasks()
+    if response.background is not None:
+        background_tasks.tasks.append(response.background)
+    background_tasks.add_task(optimize_hardware_memory)
+    response.background = background_tasks
+    return response
 
 app.include_router(transaction_router, prefix="/api/v1")
 app.include_router(user_router, prefix="/api/v1")
