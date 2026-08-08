@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import traceback
+import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
@@ -29,10 +30,9 @@ class EnrollmentResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    success: bool
+    status: str
     user_id: str
-    face_embedding_dimensions: int
-    speaker_embedding_dimensions: int
+    message: str
 
 
 @router.post(
@@ -41,7 +41,6 @@ class EnrollmentResponse(BaseModel):
     status_code=status.HTTP_201_CREATED,
 )
 async def enroll_user(
-    user_id: Annotated[str, Form(min_length=3, max_length=64)],
     full_name: Annotated[str, Form(min_length=2, max_length=120)],
     email: Annotated[EmailStr, Form()],
     phone_number: Annotated[str, Form(min_length=10, max_length=20)],
@@ -50,11 +49,11 @@ async def enroll_user(
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> EnrollmentResponse:
     """Enroll one user with face and speaker biometric embeddings."""
+    generated_id = str(uuid.uuid4())
     try:
         duplicate = await db.scalar(
             select(User.id).where(
-                (User.user_id == user_id)
-                | (User.email == str(email))
+                (User.email == str(email))
                 | (User.phone_number == phone_number)
             )
         )
@@ -87,7 +86,7 @@ async def enroll_user(
             raise ValueError("Biometric provider returned an empty embedding.")
 
         new_user = User(
-            user_id=user_id,
+            user_id=generated_id,
             full_name=full_name,
             email=str(email),
             phone_number=phone_number,
@@ -104,7 +103,7 @@ async def enroll_user(
         except Exception as exc:
             await db.rollback()
             logger.bind(
-                user_id=user_id,
+                user_id=generated_id,
                 error=str(exc),
                 traceback=traceback.format_exc(),
             ).error(
@@ -116,23 +115,22 @@ async def enroll_user(
             ) from exc
 
         logger.bind(
-            user_id=user_id,
+            user_id=generated_id,
             face_dimensions=len(pure_face_list),
             speaker_dimensions=len(pure_voice_list),
         ).info("User biometric enrollment completed.")
 
         return EnrollmentResponse(
-            success=True,
-            user_id=user_id,
-            face_embedding_dimensions=len(pure_face_list),
-            speaker_embedding_dimensions=len(pure_voice_list),
+            status="SUCCESS",
+            user_id=generated_id,
+            message="Biometric card identity generated.",
         )
     except HTTPException:
         await db.rollback()
         raise
     except IntegrityError as exc:
         await db.rollback()
-        logger.bind(user_id=user_id).warning(
+        logger.bind(user_id=generated_id).warning(
             "Enrollment rejected by a unique database constraint."
         )
         raise HTTPException(
@@ -141,7 +139,7 @@ async def enroll_user(
         ) from exc
     except ValueError as exc:
         await db.rollback()
-        logger.bind(user_id=user_id, error=str(exc)).warning(
+        logger.bind(user_id=generated_id, error=str(exc)).warning(
             "User enrollment input was rejected."
         )
         raise HTTPException(
@@ -150,7 +148,7 @@ async def enroll_user(
         ) from exc
     except Exception as exc:
         await db.rollback()
-        logger.bind(user_id=user_id, error=str(exc)).exception(
+        logger.bind(user_id=generated_id, error=str(exc)).exception(
             "User biometric enrollment failed."
         )
         raise HTTPException(

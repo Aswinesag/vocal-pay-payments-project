@@ -22,6 +22,8 @@ STEP_UP_STATUSES = {"PENDING_CHALLENGE", "PENDING_VERIFICATION"}
 
 async def run_live_transaction() -> None:
     """Execute checkout initiation and conditional webcam verification."""
+    target_user_id = input("🔑 Enter your unique secure User ID: ")
+    transaction_amount = input("💰 Enter transaction amount (e.g., 45.50): ")
     input("Press Enter, then speak your transaction authorization for 3 seconds...")
     print("Recording authorization speech...")
     recording = sd.rec(
@@ -40,8 +42,8 @@ async def run_live_transaction() -> None:
             initiate_response = await client.post(
                 INITIATE_URL,
                 data={
-                    "user_id": "real_human_01",
-                    "amount": "150.00",
+                    "user_id": target_user_id,
+                    "amount": transaction_amount,
                 },
                 files={
                     "audio_file": (

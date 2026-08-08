@@ -56,6 +56,7 @@ async def initiate_transaction(
     """Run DSP and voice risk gates before approval or step-up freezing."""
     audio_path: Path | None = None
     try:
+        amount_value = float(amount)
         audio_bytes = await audio_file.read()
         if not audio_bytes:
             raise HTTPException(status_code=422, detail="Audio file is empty.")
@@ -85,11 +86,39 @@ async def initiate_transaction(
         )
         speaker_score = float(voice_result.confidence)
 
+        if amount_value >= 500.00:
+            verification_secret = f"{secrets.randbelow(1_000_000):06d}"
+            pending = await freeze_transaction(
+                db,
+                user_id=user_id,
+                amount=amount_value,
+                status="PENDING_CHALLENGE",
+                verification_secret=verification_secret,
+            )
+            logger.info(
+                f"🔐 SECURITY STEP-UP ACTIVATED: Dispatching secure 6-digit "
+                f"verification code token directly to user registered email "
+                f"endpoint: {user.email}"
+            )
+            await db.commit()
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "success": False,
+                    "status": pending.status,
+                    "risk_tier": "HIGH",
+                    "transaction_id": pending.transaction_id,
+                    "action": "SUBMIT_OTP_OR_FACE_VERIFICATION",
+                    "expires_at": pending.expires_at.isoformat(),
+                    "rationale": "Transaction amount requires mandatory step-up verification.",
+                },
+            )
+
         decision = await ollama_service.evaluate_transaction_context(
-            amount=amount,
+            amount=amount_value,
             speaker_score=speaker_score,
-            face_score=1.0,
-            liveness_score=1.0,
+            face_score=0.0,
+            liveness_score=0.0,
             is_replay=False,
         )
         risk_tier = str(decision["risk_tier"])
@@ -112,9 +141,14 @@ async def initiate_transaction(
         pending = await freeze_transaction(
             db,
             user_id=user_id,
-            amount=amount,
+            amount=amount_value,
             status="PENDING_VERIFICATION",
             verification_secret=verification_secret,
+        )
+        logger.info(
+            f"🔐 SECURITY STEP-UP ACTIVATED: Dispatching secure 6-digit "
+            f"verification code token directly to user registered email "
+            f"endpoint: {user.email}"
         )
         await db.commit()
         raise HTTPException(
