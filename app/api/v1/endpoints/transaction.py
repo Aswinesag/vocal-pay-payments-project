@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+import re
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Annotated, Any
@@ -23,13 +24,102 @@ from app.database.database import get_async_db
 from app.database.models import PendingTransaction, User
 from app.services.ollama_service import OllamaService
 from app.services.providers.provider_factory import (
+    BiometricInferenceProxy,
     get_face_verification_provider,
     get_speaker_verification_provider,
 )
+from app.services.whisper_service import WhisperService
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 ollama_service = OllamaService()
+
+
+class _FasterWhisperProxyAdapter:
+    """Expose the Faster-Whisper service through the inference proxy contract."""
+
+    name = "FasterWhisper"
+
+    def transcribe(self, waveform: np.ndarray) -> str:
+        """Transcribe one waveform using the existing ASR service."""
+        service = WhisperService()
+        try:
+            return service.transcribe_audio(waveform)
+        finally:
+            service.release_model()
+
+
+whisper_provider = BiometricInferenceProxy(
+    _FasterWhisperProxyAdapter(),
+    "faster-whisper",
+)
+
+_NUMBER_WORDS: dict[str, int] = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+    "thirteen": 13,
+    "fourteen": 14,
+    "fifteen": 15,
+    "sixteen": 16,
+    "seventeen": 17,
+    "eighteen": 18,
+    "nineteen": 19,
+    "twenty": 20,
+    "thirty": 30,
+    "forty": 40,
+    "fifty": 50,
+    "sixty": 60,
+    "seventy": 70,
+    "eighty": 80,
+    "ninety": 90,
+}
+
+
+def _extract_transaction_amount(transcription: str) -> float:
+    """Extract a positive numeric payment amount from an ASR transcript."""
+    numeric_match = re.search(
+        r"(?:₹|\$)?\s*(\d+(?:,\d{3})*(?:\.\d{1,2})?)",
+        transcription,
+    )
+    if numeric_match is not None:
+        amount = float(numeric_match.group(1).replace(",", ""))
+        if amount > 0:
+            return amount
+
+    tokens = re.findall(r"[a-z]+", transcription.casefold())
+    total = 0
+    current = 0
+    found_number = False
+    for token in tokens:
+        if token in _NUMBER_WORDS:
+            current += _NUMBER_WORDS[token]
+            found_number = True
+        elif token == "hundred" and current:
+            current *= 100
+            found_number = True
+        elif token in {"thousand", "lakh"} and current:
+            multiplier = 1_000 if token == "thousand" else 100_000
+            total += current * multiplier
+            current = 0
+            found_number = True
+        elif found_number and token not in {"and", "rupee", "rupees", "dollar", "dollars"}:
+            break
+
+    amount = float(total + current)
+    if not found_number or amount <= 0:
+        raise ValueError("No positive transaction amount was found in the voice command.")
+    return amount
 
 
 class TransactionResponse(BaseModel):
@@ -48,15 +138,13 @@ class TransactionResponse(BaseModel):
 
 @router.post("/initiate", response_model=TransactionResponse)
 async def initiate_transaction(
-    user_id: Annotated[str, Form(min_length=1)],
-    amount: Annotated[float, Form(gt=0)],
     audio_file: Annotated[UploadFile, File()],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> TransactionResponse:
-    """Run DSP and voice risk gates before approval or step-up freezing."""
+    """Resolve a spoken payment command and run its voice risk gates."""
     audio_path: Path | None = None
+    resolved_user_id: str | None = None
     try:
-        amount_value = float(amount)
         audio_bytes = await audio_file.read()
         if not audio_bytes:
             raise HTTPException(status_code=422, detail="Audio file is empty.")
@@ -66,32 +154,57 @@ async def initiate_transaction(
             audio_path = Path(temporary.name)
 
         if detect_replay_attack(str(audio_path)):
-            logger.bind(user_id=user_id).warning("DSP replay gate blocked transaction.")
+            logger.warning("DSP replay gate blocked voice-driven transaction.")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"risk_tier": "CRITICAL", "status": "BLOCKED"},
             )
 
-        user = await db.scalar(select(User).where(User.user_id == user_id))
-        if user is None:
-            raise HTTPException(status_code=404, detail="User not found.")
-
         await audio_file.seek(0)
         waveform = await async_upload_to_waveform(audio_file)
+        transcription = str(await whisper_provider.transcribe(waveform)).strip()
+        if not transcription:
+            raise HTTPException(status_code=422, detail="The spoken command could not be transcribed.")
+        try:
+            extracted_amount = _extract_transaction_amount(transcription)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
         voice_provider = get_speaker_verification_provider()
         live_embedding = await voice_provider.extract_embedding(waveform)
-        voice_result: Any = await voice_provider.verify_speaker(
-            enrolled_embedding=user.speaker_embedding,
-            live_embedding=live_embedding,
-        )
-        speaker_score = float(voice_result.confidence)
+        users = list((await db.scalars(select(User))).all())
+        best_user: User | None = None
+        speaker_score = -1.0
+        for candidate in users:
+            if not candidate.speaker_embedding:
+                continue
+            voice_result: Any = await voice_provider.verify_speaker(
+                enrolled_embedding=candidate.speaker_embedding,
+                live_embedding=live_embedding,
+            )
+            candidate_score = float(voice_result.confidence)
+            if candidate_score > speaker_score:
+                best_user = candidate
+                speaker_score = candidate_score
 
-        if amount_value >= 500.00:
+        if best_user is None or speaker_score < settings.SPEAKER_PASS_THRESHOLD:
+            raise HTTPException(status_code=404, detail="No enrolled voice identity matched.")
+
+        user = best_user
+        resolved_user_id = user.user_id
+        logger.bind(
+            user_id=resolved_user_id,
+            speaker_score=speaker_score,
+            transcription=transcription,
+            amount=extracted_amount,
+        ).info("Voice-driven transaction command resolved.")
+
+        if extracted_amount >= 500.00:
             verification_secret = f"{secrets.randbelow(1_000_000):06d}"
             pending = await freeze_transaction(
                 db,
-                user_id=user_id,
-                amount=amount_value,
+                user_id=resolved_user_id,
+                amount=extracted_amount,
                 status="PENDING_CHALLENGE",
                 verification_secret=verification_secret,
             )
@@ -115,7 +228,7 @@ async def initiate_transaction(
             )
 
         decision = await ollama_service.evaluate_transaction_context(
-            amount=amount_value,
+            amount=extracted_amount,
             speaker_score=speaker_score,
             face_score=0.0,
             liveness_score=0.0,
@@ -140,8 +253,8 @@ async def initiate_transaction(
         verification_secret = f"{secrets.randbelow(1_000_000):06d}"
         pending = await freeze_transaction(
             db,
-            user_id=user_id,
-            amount=amount_value,
+            user_id=resolved_user_id,
+            amount=extracted_amount,
             status="PENDING_VERIFICATION",
             verification_secret=verification_secret,
         )
@@ -169,7 +282,9 @@ async def initiate_transaction(
         raise
     except Exception as exc:
         await db.rollback()
-        logger.bind(user_id=user_id, error=str(exc)).exception("Transaction initiation failed.")
+        logger.bind(user_id=resolved_user_id, error=str(exc)).exception(
+            "Transaction initiation failed."
+        )
         raise HTTPException(status_code=500, detail="Transaction initiation failed.") from exc
     finally:
         if audio_path is not None:
@@ -211,7 +326,16 @@ async def verify_transaction(
                 if user is None:
                     raise HTTPException(status_code=404, detail="User not found.")
                 face_provider = get_face_verification_provider()
-                live_embedding = await face_provider.extract_embedding(image=image)
+                try:
+                    live_embedding = await face_provider.extract_embedding(image=image)
+                except ValueError as exc:
+                    logger.bind(transaction_id=transaction_id).warning(
+                        "Step-up verification denied because no face was detected."
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Face verification failed: no face detected.",
+                    ) from exc
                 face_result: Any = await face_provider.verify_face(
                     enrolled_embedding=user.face_embedding,
                     live_embedding=live_embedding,

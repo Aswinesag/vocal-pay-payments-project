@@ -60,6 +60,7 @@ class OllamaService:
                 ),
                 format="json",
                 options={"temperature": 0},
+                keep_alive=0,
             )
 
         content = response["message"]["content"]

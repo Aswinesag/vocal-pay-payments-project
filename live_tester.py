@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 
 import cv2
@@ -16,16 +17,21 @@ VERIFY_URL = "http://127.0.0.1:8000/api/v1/transactions/verify"
 VOICE_PATH = Path("temp_checkout_voice.wav")
 FACE_PATH = Path("temp_checkout_face.jpg")
 SAMPLE_RATE = 16_000
-RECORDING_SECONDS = 3
+RECORDING_SECONDS = 4
 STEP_UP_STATUSES = {"PENDING_CHALLENGE", "PENDING_VERIFICATION"}
 
 
 async def run_live_transaction() -> None:
     """Execute checkout initiation and conditional webcam verification."""
-    target_user_id = input("🔑 Enter your unique secure User ID: ")
-    transaction_amount = input("💰 Enter transaction amount (e.g., 45.50): ")
-    input("Press Enter, then speak your transaction authorization for 3 seconds...")
-    print("Recording authorization speech...")
+    print(
+        "🎙️ CONVERSATIONAL BANKING CHANNEL ACTIVE: Press Enter and speak your "
+        "checkout authorization naturally (e.g., 'Authorize transaction for 750 "
+        "dollars')."
+    )
+    input()
+    print("🎙️ Preparing audio driver... Release the key and get ready.")
+    time.sleep(0.5)
+    print("🔴 RECORDING NOW... Speak clearly into your microphone!")
     recording = sd.rec(
         int(RECORDING_SECONDS * SAMPLE_RATE),
         samplerate=SAMPLE_RATE,
@@ -41,10 +47,6 @@ async def run_live_transaction() -> None:
         with VOICE_PATH.open("rb") as audio_stream:
             initiate_response = await client.post(
                 INITIATE_URL,
-                data={
-                    "user_id": target_user_id,
-                    "amount": transaction_amount,
-                },
                 files={
                     "audio_file": (
                         VOICE_PATH.name,
@@ -59,6 +61,13 @@ async def run_live_transaction() -> None:
 
         if initiate_response.status_code == httpx.codes.OK:
             print("Transaction auto-approved. Webcam verification was not required.")
+            return
+
+        if initiate_response.status_code == httpx.codes.NOT_FOUND:
+            print(
+                "🚫 VOICE IDENTITY MISMATCH: Your live voice did not match any "
+                "enrolled biometric profile. Transaction denied."
+            )
             return
 
         if initiate_response.status_code != httpx.codes.FORBIDDEN:
@@ -124,6 +133,12 @@ async def run_live_transaction() -> None:
 
         print(f"Verification response: HTTP {verify_response.status_code}")
         print(verify_response.text)
+        if verify_response.status_code == httpx.codes.UNAUTHORIZED:
+            print(
+                "🚨 STEP-UP VERIFICATION DENIED: No valid matching face was "
+                "detected. The transaction remains incomplete."
+            )
+            return
         verify_response.raise_for_status()
         print("Transaction finalized successfully after webcam verification.")
 
