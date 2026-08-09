@@ -127,9 +127,69 @@ class UserBase(BaseSchema):
 
         return value
 
+class UserCreate(BaseSchema):
+    """
+    User creation request with plaintext password.
+    
+    This schema is used for initial user registration where the
+    password is provided in plaintext and will be hashed server-side.
+    """
+
+    full_name: str = Field(
+        min_length=2,
+        max_length=120,
+        examples=["Aswin Kumar"],
+        description="Full legal name of the user",
+    )
+
+    email: EmailStr = Field(
+        description="Unique email address for user identification",
+    )
+
+    phone_number: str = Field(
+        min_length=10,
+        max_length=20,
+        examples=["+919876543210"],
+        description="Unique phone number with country code",
+    )
+
+    password: str = Field(
+        min_length=8,
+        max_length=128,
+        examples=["SecureP@ssw0rd123"],
+        description="Plaintext password (will be hashed server-side)",
+    )
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, value: str) -> str:
+        """Basic phone number validation."""
+        cleaned = value.replace("+", "").replace(" ", "")
+        if not cleaned.isdigit():
+            raise ValueError("Phone number must contain only digits")
+        return value
+
+    @field_validator("password")
+    @classmethod
+    def validate_password_strength(cls, value: str) -> str:
+        """Validate password meets minimum security requirements."""
+        if len(value) < 8:
+            raise ValueError("Password must be at least 8 characters long")
+        if not any(c.isupper() for c in value):
+            raise ValueError("Password must contain at least one uppercase letter")
+        if not any(c.islower() for c in value):
+            raise ValueError("Password must contain at least one lowercase letter")
+        if not any(c.isdigit() for c in value):
+            raise ValueError("Password must contain at least one digit")
+        return value
+
+
 class UserRegistrationRequest(UserBase):
     """
-    User registration request.
+    User registration request with biometric embeddings.
+    
+    This schema is used for biometric enrollment where embeddings
+    are captured during the registration process.
     """
 
     user_id: str = Field(
@@ -174,7 +234,22 @@ class UserUpdateRequest(BaseSchema):
 class UserResponse(UserBase):
     """
     Public user response model.
+    
+    Security Note: Explicitly excludes sensitive fields from serialization:
+    - hashed_password: Never exposed in API responses
+    - speaker_embedding: Biometric data privacy protection
+    - face_embedding: Biometric data privacy protection
     """
+
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        validate_assignment=True,
+        extra="forbid",
+        str_strip_whitespace=True,
+        # Explicitly exclude sensitive biometric and authentication data
+        exclude={"hashed_password", "speaker_embedding", "face_embedding"},
+    )
 
     id: int
 

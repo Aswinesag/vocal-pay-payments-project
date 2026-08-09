@@ -185,6 +185,16 @@ class User(
     )
 
     # ------------------------------------------------------
+    # Security & Authentication
+    # ------------------------------------------------------
+
+    hashed_password: Mapped[str] = mapped_column(
+        String(255),
+        nullable=False,
+        comment="Bcrypt or Argon2 hashed password for authentication",
+    )
+
+    # ------------------------------------------------------
     # Biometrics
     # ------------------------------------------------------
 

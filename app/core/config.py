@@ -65,5 +65,34 @@ class Settings(BaseSettings):
     )
     STEP_UP_TIMEOUT_SECONDS: int = Field(default=300, gt=0)
 
+    # ------------------------------------------------------
+    # Security & Authentication
+    # ------------------------------------------------------
+
+    JWT_SECRET_KEY: str = Field(
+        default="CHANGE_THIS_TO_A_SECURE_RANDOM_SECRET_KEY_IN_PRODUCTION",
+        min_length=32,
+        description="Secret key for JWT token signing (HS256 algorithm)",
+    )
+
+    JWT_ALGORITHM: str = Field(
+        default="HS256",
+        description="JWT signing algorithm (HMAC SHA-256)",
+    )
+
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(
+        default=30,
+        gt=0,
+        le=1440,
+        description="JWT access token expiration time in minutes",
+    )
+
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(
+        default=7,
+        gt=0,
+        le=30,
+        description="JWT refresh token expiration time in days",
+    )
+
 
 settings = Settings()
