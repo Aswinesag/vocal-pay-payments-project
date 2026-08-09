@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
 from loguru import logger
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
@@ -101,8 +103,17 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(transaction_router, prefix="/api/v1")
 app.include_router(user_router, prefix="/api/v1")
 
+# Template configuration
+templates = Jinja2Templates(directory="app/templates")
 
-@app.get("/", response_model=dict[str, str])
+
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Serve the VocalPay authentication SPA interface."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/health", response_model=dict[str, str])
 async def health_check() -> dict[str, str]:
     """Return a lightweight application health response."""
     return {
