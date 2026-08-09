@@ -115,10 +115,14 @@ This is the primary VRAM-protection mechanism at the ingestion boundary: compute
 
 | Parameter | Threshold | Interpretation |
 |---|---|---|
-| Spectral Roll-off | **< 2500 Hz** | Frequency below which a specified percentage of total spectral energy is contained. Replayed audio through consumer speaker hardware characteristically compresses high-frequency content, pulling roll-off downward relative to genuine live speech. |
-| Spectral Centroid | **> 1800 Hz** | The "center of mass" of the spectrum. Electronic playback and re-recording through a second microphone tends to introduce a brighter, more electronically-colored spectral centroid than natural live vocal production. |
+| Spectral Roll-off | **>= 4800 Hz** | Frequency below which a specified percentage (85%) of total spectral energy is contained. Replayed audio through consumer speaker hardware characteristically exhibits elevated roll-off values due to amplified high-frequency distortion artifacts introduced by the secondary recording path. |
+| Spectral Centroid | **>= 2700 Hz** | The "center of mass" of the spectrum. Electronic playback and re-recording through a second microphone tends to introduce a brighter, more electronically-colored spectral centroid than natural live vocal production, shifting the energy distribution toward higher frequencies. |
 
-**Detection rule:** if the analyzed audio segment exhibits spectral roll-off below the 2500 Hz threshold **in conjunction with** spectral centroid above the 1800 Hz threshold, the input is classified as a probable playback/replay artifact and the request is immediately escalated to **CRITICAL** risk.
+**Detection rule:** if the analyzed audio segment exhibits spectral roll-off **at or above** the 4800 Hz threshold **in conjunction with** spectral centroid **at or above** the 2700 Hz threshold, the input is classified as a probable playback/replay artifact and the request is immediately escalated to **CRITICAL** risk.
+
+**Implementation Reference:** These thresholds are enforced in `app/core/audio_dsp.py` as:
+- `ROLLOFF_THRESHOLD = 4800.0`
+- `CENTROID_THRESHOLD = 2700.0`
 
 ### 3.3 Enforcement Behavior
 

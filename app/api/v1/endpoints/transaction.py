@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import secrets
 import re
+import uuid
 from pathlib import Path
 from tempfile import NamedTemporaryFile
+from time import perf_counter
 from typing import Annotated, Any
 
 import cv2
@@ -19,9 +21,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audio_dsp import detect_replay_attack
 from app.core.config import settings
 from app.core.converters import async_upload_to_numpy, async_upload_to_waveform
-from app.database.crud import freeze_transaction, get_active_transaction, invalidate_transaction
+from app.database.crud import create_transaction, freeze_transaction, get_active_transaction, invalidate_transaction
 from app.database.database import get_async_db
-from app.database.models import PendingTransaction, User
+from app.database.models import PendingTransaction, Transaction, User
 from app.services.ollama_service import OllamaService
 from app.services.providers.provider_factory import (
     BiometricInferenceProxy,
@@ -144,6 +146,7 @@ async def initiate_transaction(
     """Resolve a spoken payment command and run its voice risk gates."""
     audio_path: Path | None = None
     resolved_user_id: str | None = None
+    request_start_time = perf_counter()
     try:
         audio_bytes = await audio_file.read()
         if not audio_bytes:
@@ -238,11 +241,39 @@ async def initiate_transaction(
         rationale = str(decision["explainable_ai_rationale"])
 
         if risk_tier == "LOW":
+            # Create immutable audit record for LOW-risk auto-approved transaction
+            processing_time_ms = (perf_counter() - request_start_time) * 1000.0
+            transaction_record = Transaction(
+                transaction_id=str(uuid.uuid4()),
+                user_id=resolved_user_id,
+                amount=extracted_amount,
+                status="COMPLETED",
+                risk_level="LOW",
+                success=True,
+                speaker_score=speaker_score,
+                face_score=0.0,
+                fraud_score=float(decision.get("fraud_score", 0.0)),
+                xai_reason=rationale,
+                processing_time_ms=processing_time_ms,
+                replay_attack=False,
+            )
+            await create_transaction(db, transaction_record)
+            await db.commit()
+            
+            logger.bind(
+                transaction_id=transaction_record.transaction_id,
+                user_id=resolved_user_id,
+                amount=extracted_amount,
+                risk_tier="LOW",
+                processing_time_ms=round(processing_time_ms, 2),
+            ).info("LOW-risk transaction auto-approved and committed to ledger.")
+            
             return TransactionResponse(
                 success=True,
                 status="SUCCESS",
                 risk_tier=risk_tier,
                 rationale=rationale,
+                transaction_id=transaction_record.transaction_id,
             )
         if risk_tier not in {"MEDIUM", "HIGH"}:
             raise HTTPException(
