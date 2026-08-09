@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         case_sensitive=True,
         extra="ignore",
-        strict=True,
+        strict=False,  # Allow type coercion from env vars (strings → int)
         validate_default=True,
     )
 
