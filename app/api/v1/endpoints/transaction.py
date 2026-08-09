@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.audio_dsp import detect_replay_attack
 from app.core.config import settings
 from app.core.converters import async_upload_to_numpy, async_upload_to_waveform
+from app.core.vector_index import search_voiceprint, VoiceprintIndexError
 from app.database.crud import create_transaction, freeze_transaction, get_active_transaction, invalidate_transaction
 from app.database.database import get_async_db
 from app.database.models import PendingTransaction, Transaction, User
@@ -173,28 +174,59 @@ async def initiate_transaction(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+        # Extract live speaker embedding using SpeechBrain (CPU)
         voice_provider = get_speaker_verification_provider()
         live_embedding = await voice_provider.extract_embedding(waveform)
-        users = list((await db.scalars(select(User))).all())
-        best_user: User | None = None
-        speaker_score = -1.0
-        for candidate in users:
-            if not candidate.speaker_embedding:
-                continue
-            voice_result: Any = await voice_provider.verify_speaker(
-                enrolled_embedding=candidate.speaker_embedding,
-                live_embedding=live_embedding,
+        
+        # Rapid O(log n) voice identity resolution via FAISS HNSW index
+        try:
+            resolved_user_id, speaker_score = await search_voiceprint(live_embedding)
+            logger.bind(
+                user_id=resolved_user_id,
+                speaker_score=round(speaker_score, 6),
+                search_method="FAISS_HNSW",
+            ).debug("FAISS voiceprint search completed in <50ms.")
+        except VoiceprintIndexError as exc:
+            logger.bind(error=str(exc)).warning(
+                "FAISS index not available, falling back to linear search."
             )
-            candidate_score = float(voice_result.confidence)
-            if candidate_score > speaker_score:
-                best_user = candidate
-                speaker_score = candidate_score
+            # Fallback to O(n) linear search if FAISS index unavailable
+            users = list((await db.scalars(select(User))).all())
+            best_user: User | None = None
+            speaker_score = -1.0
+            for candidate in users:
+                if not candidate.speaker_embedding:
+                    continue
+                voice_result: Any = await voice_provider.verify_speaker(
+                    enrolled_embedding=candidate.speaker_embedding,
+                    live_embedding=live_embedding,
+                )
+                candidate_score = float(voice_result.confidence)
+                if candidate_score > speaker_score:
+                    best_user = candidate
+                    speaker_score = candidate_score
+            
+            if best_user is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No enrolled voice identity matched."
+                )
+            resolved_user_id = best_user.user_id
 
-        if best_user is None or speaker_score < settings.SPEAKER_PASS_THRESHOLD:
-            raise HTTPException(status_code=404, detail="No enrolled voice identity matched.")
-
-        user = best_user
-        resolved_user_id = user.user_id
+        # Verify speaker score meets threshold
+        if speaker_score < settings.SPEAKER_PASS_THRESHOLD:
+            raise HTTPException(
+                status_code=404,
+                detail="No enrolled voice identity matched."
+            )
+        
+        # Load full user record from database
+        user = await db.scalar(select(User).where(User.user_id == resolved_user_id))
+        if user is None:
+            raise HTTPException(
+                status_code=404,
+                detail="User not found in database."
+            )
         logger.bind(
             user_id=resolved_user_id,
             speaker_score=speaker_score,

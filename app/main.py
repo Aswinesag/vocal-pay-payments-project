@@ -16,7 +16,8 @@ from app.api.v1.endpoints.user import router as user_router
 from app.core.config import settings
 from app.core.constants import PROJECT_VERSION
 from app.core.memory_manager import optimize_hardware_memory
-from app.database.database import close_database, initialize_database
+from app.core.vector_index import initialize_voiceprint_index
+from app.database.database import close_database, get_async_db, initialize_database
 
 
 @asynccontextmanager
@@ -27,6 +28,22 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     )
     try:
         await initialize_database()
+        logger.bind(application=settings.APP_NAME).info(
+            "Database initialized successfully."
+        )
+        
+        # Initialize FAISS voiceprint index for rapid O(log n) voice identity resolution
+        async for db in get_async_db():
+            try:
+                index_stats = await initialize_voiceprint_index(db)
+                logger.bind(
+                    **index_stats,
+                    application=settings.APP_NAME
+                ).info("FAISS voiceprint index initialized successfully.")
+            finally:
+                await db.close()
+            break
+        
         logger.bind(application=settings.APP_NAME).info(
             "VocalPay application startup completed."
         )
