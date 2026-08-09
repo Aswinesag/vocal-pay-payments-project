@@ -11,6 +11,7 @@ from loguru import logger
 from starlette.middleware.base import RequestResponseEndpoint
 from starlette.responses import Response
 
+from app.api.v1.endpoints.auth import router as auth_router
 from app.api.v1.endpoints.transaction import router as transaction_router
 from app.api.v1.endpoints.user import router as user_router
 from app.core.config import settings
@@ -96,6 +97,7 @@ async def schedule_memory_optimization(
     response.background = background_tasks
     return response
 
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(transaction_router, prefix="/api/v1")
 app.include_router(user_router, prefix="/api/v1")
 
