@@ -110,9 +110,18 @@ class VoiceprintIndex:
                 users = result.scalars().all()
 
                 if not users:
-                    raise VoiceprintIndexError(
-                        "No users with speaker embeddings found in database."
+                    logger.warning(
+                        "No users with speaker embeddings found in database. "
+                        "FAISS index will be empty. System will use fallback linear search."
                     )
+                    # Return empty index stats - system will gracefully degrade
+                    return {
+                        "index_size": 0,
+                        "build_time_ms": 0.0,
+                        "hnsw_m": 0,
+                        "status": "empty",
+                        "message": "No enrolled users - fallback to linear search",
+                    }
 
                 # Extract embeddings and user IDs
                 embeddings_list = []
@@ -129,9 +138,17 @@ class VoiceprintIndex:
                         )
 
                 if not embeddings_list:
-                    raise VoiceprintIndexError(
-                        "No valid 192-dimensional speaker embeddings found."
+                    logger.warning(
+                        "No valid 192-dimensional speaker embeddings found. "
+                        "FAISS index will be empty. System will use fallback linear search."
                     )
+                    return {
+                        "index_size": 0,
+                        "build_time_ms": 0.0,
+                        "hnsw_m": 0,
+                        "status": "empty",
+                        "message": "No valid embeddings - fallback to linear search",
+                    }
 
                 # Convert to numpy array and normalize for cosine similarity
                 embeddings = np.array(embeddings_list, dtype=np.float32)
