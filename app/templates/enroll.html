@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Biometric Enrollment - VocalPay</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        @keyframes pulse-ring {
+            0%, 100% { transform: scale(1); opacity: 0.5; }
+            50% { transform: scale(1.05); opacity: 0.8; }
+        }
+        .pulse-ring { animation: pulse-ring 2s ease-in-out infinite; }
+        #video-preview { transform: scaleX(-1); }
+        @keyframes recording-pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+        .recording { animation: recording-pulse 1s ease-in-out infinite; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-2xl">
+        
+        <!-- Progress Steps -->
+        <div class="mb-8 flex justify-between items-center">
+            <div class="flex items-center gap-3">
+                <div id="step1-icon" class="w-12 h-12 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-lg">1</div>
+                <span class="text-white font-semibold">Face</span>
+            </div>
+            <div class="flex-1 h-1 mx-4 bg-slate-700 rounded-full">
+                <div id="progress-bar" class="h-full bg-indigo-600 transition-all duration-500" style="width: 0%"></div>
+            </div>
+            <div class="flex items-center gap-3">
+                <div id="step2-icon" class="w-12 h-12 rounded-full bg-slate-700 text-slate-400 flex items-center justify-center font-bold text-lg">2</div>
+                <span class="text-slate-400 font-semibold">Voice</span>
+            </div>
+        </div>
+        
+        <!-- Step 1: Face Registration -->
+        <div id="step1-container" class="glassmorphism rounded-3xl p-8 shadow-2xl">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center">
+                    <i class="fas fa-camera text-3xl text-white"></i>
+                </div>
+                <h2 class="text-3xl font-bold text-white mb-2">Face Registration</h2>
+                <p class="text-slate-400">Center your face and capture a clear photo</p>
+            </div>
+            
+            <div class="relative mx-auto mb-6" style="width: 320px; height: 320px;">
+                <div class="absolute inset-0 rounded-full overflow-hidden border-4 border-indigo-500 bg-slate-800">
+                    <video id="video-preview" autoplay playsinline class="w-full h-full object-cover hidden"></video>
+                    <canvas id="snapshot-canvas" class="hidden w-full h-full object-cover"></canvas>
+                    <div id="camera-placeholder" class="w-full h-full flex items-center justify-center">
+                        <i class="fas fa-camera text-6xl text-slate-600"></i>
+                    </div>
+                </div>
+                <div id="camera-pulse" class="hidden absolute inset-0 rounded-full border-4 border-indigo-400/40 pulse-ring"></div>
+            </div>
+            
+            <div class="space-y-3">
+                <button id="start-camera-btn" onclick="startCamera()"
+                    class="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white font-semibold rounded-xl">
+                    <i class="fas fa-video mr-2"></i>Start Camera
+                </button>
+                <button id="capture-btn" onclick="capturePhoto()" disabled
+                    class="hidden w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl disabled:opacity-50">
+                    <i class="fas fa-camera mr-2"></i>Capture Photo
+                </button>
+                <button id="retake-photo-btn" onclick="retakePhoto()"
+                    class="hidden w-full py-3 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-xl">
+                    <i class="fas fa-redo mr-2"></i>Retake
+                </button>
+                <button id="next-step-btn" onclick="goToStep2()" disabled
+                    class="hidden w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 text-white font-semibold rounded-xl disabled:opacity-50">
+                    Next <i class="fas fa-arrow-right ml-2"></i>
+                </button>
+            </div>
+            
+            <div id="face-error" class="hidden mt-4 p-4 bg-red-500/20 border border-red-500 rounded-xl">
+                <p class="text-red-400 text-sm"><i class="fas fa-exclamation-circle mr-2"></i><span id="face-error-text"></span></p>
+            </div>
+        </div>
+
+        
+        <!-- Step 2: Voice Registration -->
+        <div id="step2-container" class="hidden glassmorphism rounded-3xl p-8 shadow-2xl">
+            <div class="text-center mb-6">
+                <div class="w-16 h-16 mx-auto mb-4 bg-gradient-to-br from-purple-600 to-pink-600 rounded-2xl flex items-center justify-center">
+                    <i class="fas fa-microphone text-3xl text-white"></i>
+                </div>
+                <h2 class="text-3xl font-bold text-white mb-2">Voice Registration</h2>
+                <p class="text-slate-400">Record a 5-10 second voice sample</p>
+            </div>
+            
+            <div class="relative mx-auto mb-6 p-8">
+                <div class="w-48 h-48 mx-auto relative">
+                    <div id="mic-pulse" class="absolute inset-0 rounded-full bg-gradient-to-r from-purple-600 to-pink-600 opacity-20"></div>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <div class="w-32 h-32 rounded-full bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center">
+                            <i id="mic-icon" class="fas fa-microphone text-5xl text-white"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="text-center mt-6">
+                    <div id="recording-timer" class="hidden text-5xl font-bold text-white mb-2">0:00</div>
+                    <div id="recording-status" class="text-slate-400 text-lg">Ready to record</div>
+                </div>
+                
+                <div class="mt-6 p-4 bg-purple-500/10 border border-purple-500/30 rounded-xl">
+                    <p class="text-purple-300 text-center font-medium">
+                        <i class="fas fa-info-circle mr-2"></i>
+                        Say: "My voice is my password, verify me"
+                    </p>
+                </div>
+            </div>
+            
+            <div class="space-y-3">
+                <button id="start-recording-btn" onclick="startRecording()"
+                    class="w-full py-4 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 text-white font-semibold rounded-xl">
+                    <i class="fas fa-microphone mr-2"></i>Start Recording
+                </button>
+                <button id="stop-recording-btn" onclick="stopRecording()" disabled
+                    class="hidden w-full py-4 bg-gradient-to-r from-red-600 to-red-700 text-white font-semibold rounded-xl">
+                    <i class="fas fa-stop mr-2"></i>Stop Recording
+                </button>
+                <button id="retake-audio-btn" onclick="retakeAudio()"
+                    class="hidden w-full py-3 bg-slate-700 hover:bg-slate-600 text-white font-semibold rounded-xl">
+                    <i class="fas fa-redo mr-2"></i>Re-record
+                </button>
+                <button id="submit-enrollment-btn" onclick="submitEnrollment()" disabled
+                    class="hidden w-full py-4 bg-gradient-to-r from-green-600 to-emerald-600 text-white font-semibold rounded-xl disabled:opacity-50">
+                    <i class="fas fa-check-circle mr-2"></i>Complete Enrollment
+                </button>
+            </div>
+            
+            <div id="voice-error" class="hidden mt-4 p-4 bg-red-500/20 border border-red-500 rounded-xl">
+                <p class="text-red-400 text-sm"><i class="fas fa-exclamation-circle mr-2"></i><span id="voice-error-text"></span></p>
+        
+    </div>
+    
+    <!-- Loading Overlay -->
+    <div id="loading" class="hidden fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50">
+        <div class="glassmorphism rounded-2xl p-8 text-center max-w-sm">
+            <div class="animate-spin rounded-full h-20 w-20 border-4 border-purple-500 border-t-transparent mx-auto mb-6"></div>
+            <h3 class="text-white font-bold text-xl mb-2">Processing Biometrics</h3>
+            <p class="text-slate-400" id="loading-message">Extracting embeddings...</p>
+        </div>
+    </div>
+    
+    <script>
+        // State
+        let videoStream = null;
+        let faceSnapshot = null;
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let audioBlob = null;
+        let recordingTimer = null;
+        let recordingSeconds = 0;
+        
+        // Camera Functions
+        async function startCamera() {
+            try {
+                videoStream = await navigator.mediaDevices.getUserMedia({
+                    video: { width: 640, height: 640, facingMode: 'user' }
+                });
+                
+                const video = document.getElementById('video-preview');
+                video.srcObject = videoStream;
+                video.classList.remove('hidden');
+                document.getElementById('camera-placeholder').classList.add('hidden');
+                document.getElementById('camera-pulse').classList.remove('hidden');
+                
+                document.getElementById('start-camera-btn').classList.add('hidden');
+                document.getElementById('capture-btn').classList.remove('hidden');
+                document.getElementById('capture-btn').disabled = false;
+                document.getElementById('face-error').classList.add('hidden');
+            } catch (error) {
+                showError('face-error', 'face-error-text', 'Camera access denied: ' + error.message);
+            }
+        }
+        
+        function capturePhoto() {
+            const video = document.getElementById('video-preview');
+            const canvas = document.getElementById('snapshot-canvas');
+            const ctx = canvas.getContext('2d');
+            
+            canvas.width = 640;
+            canvas.height = 640;
+            
+            ctx.save();
+            ctx.scale(-1, 1);
+            ctx.drawImage(video, -canvas.width, 0, canvas.width, canvas.height);
+            ctx.restore();
+            
+            canvas.toBlob((blob) => {
+                faceSnapshot = blob;
+                
+                if (videoStream) {
+                    videoStream.getTracks().forEach(track => track.stop());
+                }
+                
+                video.classList.add('hidden');
+                canvas.classList.remove('hidden');
+                document.getElementById('camera-pulse').classList.add('hidden');
+                
+                document.getElementById('capture-btn').classList.add('hidden');
+                document.getElementById('retake-photo-btn').classList.remove('hidden');
+                document.getElementById('next-step-btn').classList.remove('hidden');
+                document.getElementById('next-step-btn').disabled = false;
+            }, 'image/jpeg', 0.9);
+        }
+        
+        function retakePhoto() {
+            faceSnapshot = null;
+            document.getElementById('snapshot-canvas').classList.add('hidden');
+            document.getElementById('camera-placeholder').classList.remove('hidden');
+            document.getElementById('retake-photo-btn').classList.add('hidden');
+            document.getElementById('next-step-btn').classList.add('hidden');
+            document.getElementById('start-camera-btn').classList.remove('hidden');
+        }
+        
+        function goToStep2() {
+            document.getElementById('step1-container').classList.add('hidden');
+            document.getElementById('step2-container').classList.remove('hidden');
+            document.getElementById('step1-icon').classList.remove('bg-indigo-600');
+            document.getElementById('step1-icon').classList.add('bg-green-600');
+            document.getElementById('step2-icon').classList.remove('bg-slate-700', 'text-slate-400');
+            document.getElementById('step2-icon').classList.add('bg-purple-600', 'text-white');
+            document.getElementById('progress-bar').style.width = '50%';
+        
+        // Audio Recording Functions
+        async function startRecording() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+                });
+                
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm;codecs=opus' });
+                audioChunks = [];
+                recordingSeconds = 0;
+                
+                mediaRecorder.ondataavailable = (event) => {
+                    if (event.data.size > 0) audioChunks.push(event.data);
+                };
+                
+                mediaRecorder.onstop = () => {
+                    audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    stream.getTracks().forEach(track => track.stop());
+                    document.getElementById('mic-icon').classList.remove('recording');
+                    document.getElementById('mic-pulse').classList.remove('pulse-ring');
+                };
+                
+                mediaRecorder.start();
+                document.getElementById('mic-icon').classList.add('recording');
+                document.getElementById('mic-pulse').classList.add('pulse-ring');
+                document.getElementById('recording-timer').classList.remove('hidden');
+                document.getElementById('recording-status').textContent = 'Recording...';
+                document.getElementById('start-recording-btn').classList.add('hidden');
+                document.getElementById('stop-recording-btn').classList.remove('hidden');
+                document.getElementById('stop-recording-btn').disabled = false;
+                document.getElementById('voice-error').classList.add('hidden');
+                
+                recordingTimer = setInterval(() => {
+                    recordingSeconds++;
+                    document.getElementById('recording-timer').textContent = `0:${recordingSeconds.toString().padStart(2, '0')}`;
+                    if (recordingSeconds >= 10) stopRecording();
+                }, 1000);
+            } catch (error) {
+                showError('voice-error', 'voice-error-text', 'Microphone access denied: ' + error.message);
+            }
+        }
+        
+        function stopRecording() {
+            if (mediaRecorder && mediaRecorder.state === 'recording') {
+                mediaRecorder.stop();
+                clearInterval(recordingTimer);
+                document.getElementById('recording-status').textContent = 'Recording complete';
+                document.getElementById('stop-recording-btn').classList.add('hidden');
+                document.getElementById('retake-audio-btn').classList.remove('hidden');
+                document.getElementById('submit-enrollment-btn').classList.remove('hidden');
+                document.getElementById('submit-enrollment-btn').disabled = false;
+            }
+        }
+        
+        function retakeAudio() {
+            audioBlob = null;
+            recordingSeconds = 0;
+            document.getElementById('recording-timer').textContent = '0:00';
+            document.getElementById('recording-timer').classList.add('hidden');
+            document.getElementById('recording-status').textContent = 'Ready to record';
+            document.getElementById('retake-audio-btn').classList.add('hidden');
+            document.getElementById('submit-enrollment-btn').classList.add('hidden');
+            document.getElementById('start-recording-btn').classList.remove('hidden');
+        }
+        
+        async function submitEnrollment() {
+            const user = JSON.parse(localStorage.getItem('user') || '{}');
+            const token = localStorage.getItem('access_token');
+            
+            if (!faceSnapshot || !audioBlob) {
+                alert('Please complete both face and voice capture');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('full_name', user.full_name || 'User');
+            formData.append('email', user.email || '');
+            formData.append('phone_number', user.phone_number || '');
+            formData.append('photo_file', faceSnapshot, 'face.jpg');
+            formData.append('audio_file', audioBlob, 'voice.webm');
+            
+            document.getElementById('loading').classList.remove('hidden');
+            
+            try {
+                const response = await fetch('/api/v1/users/enroll', {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                if (response.ok) {
+                    document.getElementById('progress-bar').style.width = '100%';
+                    setTimeout(() => {
+                        alert('✅ Biometric enrollment successful!');
+                        window.location.href = '/dashboard';
+                    }, 500);
+                } else {
+                    throw new Error(data.detail || 'Enrollment failed');
+                }
+            } catch (error) {
+                showError('voice-error', 'voice-error-text', error.message);
+            } finally {
+                document.getElementById('loading').classList.add('hidden');
+            }
+        }
+        
+        function showError(containerId, textId, message) {
+            document.getElementById(containerId).classList.remove('hidden');
+            document.getElementById(textId).textContent = message;
+        }
+    </script>
+</body>
+</html>
+
+        }
+
+            </div>
+        </div>
+
+

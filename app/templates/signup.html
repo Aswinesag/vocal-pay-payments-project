@@ -138,7 +138,7 @@
                     if (loginResponse.ok) {
                         localStorage.setItem('access_token', loginData.access_token);
                         localStorage.setItem('user', JSON.stringify(loginData.user));
-                        window.location.href = '/dashboard';
+                        window.location.href = '/enroll';  // Redirect to biometric enrollment
                     } else {
                         window.location.href = '/signin';
                     }

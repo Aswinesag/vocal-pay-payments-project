@@ -131,6 +131,12 @@ async def dashboard_page(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
 
 
+@app.get("/enroll", response_class=HTMLResponse)
+async def enroll_page(request: Request):
+    """Serve the biometric enrollment wizard."""
+    return templates.TemplateResponse("enroll.html", {"request": request})
+
+
 @app.get("/health", response_model=dict[str, str])
 async def health_check() -> dict[str, str]:
     """Return a lightweight application health response."""
