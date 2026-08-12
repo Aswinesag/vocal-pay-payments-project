@@ -109,7 +109,25 @@ templates = Jinja2Templates(directory="app/templates")
 
 @app.get("/", response_class=HTMLResponse)
 async def index(request: Request):
-    """Serve the VocalPay authentication SPA interface."""
+    """Serve the VocalPay welcome page."""
+    return templates.TemplateResponse("welcome.html", {"request": request})
+
+
+@app.get("/signin", response_class=HTMLResponse)
+async def signin_page(request: Request):
+    """Serve the sign-in page."""
+    return templates.TemplateResponse("signin.html", {"request": request})
+
+
+@app.get("/signup", response_class=HTMLResponse)
+async def signup_page(request: Request):
+    """Serve the sign-up page."""
+    return templates.TemplateResponse("signup.html", {"request": request})
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    """Serve the user dashboard (old index.html)."""
     return templates.TemplateResponse("index.html", {"request": request})
 
 

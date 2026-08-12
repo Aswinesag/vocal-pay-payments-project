@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VocalPay - Welcome</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fade-in { animation: fadeIn 0.5s ease-in; }
+        .gradient-text {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 min-h-screen flex items-center justify-center p-4">
+    <div class="w-full max-w-5xl animate-fade-in">
+        <div class="text-center mb-12">
+            <div class="glassmorphism w-20 h-20 mx-auto rounded-2xl flex items-center justify-center mb-6">
+                <i class="fas fa-microphone text-4xl text-indigo-400"></i>
+            </div>
+            <h1 class="text-6xl font-bold text-white mb-4">
+                Welcome to <span class="gradient-text">VocalPay</span>
+            </h1>
+            <p class="text-xl text-slate-300">Secure voice-based financial transactions</p>
+        </div>
+        <div class="grid md:grid-cols-2 gap-6 mb-8">
+            <a href="/signin" class="group">
+                <div class="glassmorphism rounded-3xl p-8 hover:scale-105 transition-all duration-300 border-2 border-transparent hover:border-indigo-500/50">
+                    <div class="flex justify-between mb-6">
+                        <div class="w-16 h-16 bg-gradient-to-br from-indigo-600 to-purple-600 rounded-2xl flex items-center justify-center">
+                            <i class="fas fa-sign-in-alt text-2xl text-white"></i>
+                        </div>
+                        <i class="fas fa-arrow-right text-2xl text-slate-400 group-hover:text-indigo-400 group-hover:translate-x-2 transition-all"></i>
+                    </div>
+                    <h3 class="text-3xl font-bold text-white mb-3">Sign In</h3>
+                    <p class="text-slate-400 text-lg">Already have an account?</p>
+                </div>
+            </a>
+            <a href="/signup" class="group">
+                <div class="glassmorphism rounded-3xl p-8 hover:scale-105 transition-all duration-300 border-2 border-transparent hover:border-purple-500/50">
+                    <div class="flex justify-between mb-6">
+                        <div class="w-16 h-16 bg-gradient-to-br from-purple-600 to-pink-600 rounded-2xl flex items-center justify-center">
+                            <i class="fas fa-user-plus text-2xl text-white"></i>
+                        </div>
+                        <i class="fas fa-arrow-right text-2xl text-slate-400 group-hover:text-purple-400 group-hover:translate-x-2 transition-all"></i>
+                    </div>
+                    <h3 class="text-3xl font-bold text-white mb-3">Sign Up</h3>
+                    <p class="text-slate-400 text-lg">Create your account</p>
+                </div>
+            </a>
+        </div>
+    </div>
+</body>
+</html>
