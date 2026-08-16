@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - VocalPay</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        body { font-family: 'Inter', sans-serif; }
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        @keyframes pulse-ring {
+            0% { transform: scale(0.95); opacity: 1; }
+            50% { transform: scale(1.1); opacity: 0.7; }
+            100% { transform: scale(0.95); opacity: 1; }
+        }
+        @keyframes pulse-mic {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+        .pulse-ring {
+            animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        .pulse-mic {
+            animation: pulse-mic 1s ease-in-out infinite;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .fade-in {
+            animation: fadeIn 0.5s ease-in;
+        }
+        @keyframes slideUp {
+            from { opacity: 0; transform: translateY(100px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .slide-up {
+            animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 min-h-screen">
+    <!-- Navigation Bar -->
+    <nav class="glassmorphism border-b border-white/10">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-microphone text-white text-lg"></i>
+                    </div>
+                    <span class="text-white text-xl font-bold">VocalPay</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <span id="userGreeting" class="text-slate-300 text-sm"></span>
+                    <button onclick="logout()" class="text-slate-300 hover:text-white transition-colors">
+                        <i class="fas fa-sign-out-alt"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- Balance Card -->
+        <div class="glassmorphism rounded-2xl p-6 mb-6 slide-up">
+            <div class="flex justify-between items-start">
+                <div>
+                    <p class="text-slate-400 text-sm mb-2">Available Balance</p>
+                    <h1 class="text-4xl font-bold text-white mb-1">₹<span id="balanceAmount">12,459.00</span></h1>
+                    <p class="text-emerald-400 text-sm">
+                        <i class="fas fa-arrow-up mr-1"></i>
+                        +₹2,340.00 this month
+                    </p>
+                </div>
+                <div class="flex flex-col items-end space-y-2">
+                    <span class="px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium">
+                        Active
+                    </span>
+                    <span class="text-slate-400 text-xs">Account ID: <span id="accountId">****1234</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+            <!-- Voice Transfer Button -->
+            <button onclick="openVoiceModal()" class="glassmorphism rounded-xl p-6 hover:bg-white/10 transition-all group slide-up">
+                <div class="w-12 h-12 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                    <i class="fas fa-microphone text-white text-xl"></i>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Voice Transfer</h3>
+                <p class="text-slate-400 text-sm">Speak to send money</p>
+            </button>
+
+            <!-- Quick Send Button -->
+            <button class="glassmorphism rounded-xl p-6 hover:bg-white/10 transition-all group slide-up" style="animation-delay: 0.1s">
+                <div class="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                    <i class="fas fa-paper-plane text-white text-xl"></i>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Quick Send</h3>
+                <p class="text-slate-400 text-sm">To recent contacts</p>
+            </button>
+
+            <!-- Request Money Button -->
+            <button class="glassmorphism rounded-xl p-6 hover:bg-white/10 transition-all group slide-up" style="animation-delay: 0.2s">
+                <div class="w-12 h-12 bg-gradient-to-br from-pink-500 to-rose-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                    <i class="fas fa-hand-holding-usd text-white text-xl"></i>
+                </div>
+                <h3 class="text-white font-semibold mb-1">Request Money</h3>
+                <p class="text-slate-400 text-sm">From contacts</p>
+            </button>
+
+            <!-- History Button -->
+            <button onclick="scrollToHistory()" class="glassmorphism rounded-xl p-6 hover:bg-white/10 transition-all group slide-up" style="animation-delay: 0.3s">
+                <div class="w-12 h-12 bg-gradient-to-br from-blue-500 to-cyan-600 rounded-xl flex items-center justify-center mb-3 group-hover:scale-110 transition-transform">
+                    <i class="fas fa-history text-white text-xl"></i>
+                </div>
+                <h3 class="text-white font-semibold mb-1">History</h3>
+                <p class="text-slate-400 text-sm">View all transactions</p>
+            </button>
+        </div>
+
+        <!-- XAI Alert Card (Hidden by default) -->
+        <div id="xaiAlert" class="hidden glassmorphism rounded-2xl p-6 mb-6 border-l-4 fade-in">
+            <div class="flex items-start space-x-4">
+                <div id="xaiIcon" class="flex-shrink-0 w-12 h-12 rounded-xl flex items-center justify-center">
+                    <i class="fas fa-brain text-2xl"></i>
+                </div>
+                <div class="flex-1">
+                    <div class="flex items-center justify-between mb-2">
+                        <h3 id="xaiTitle" class="text-white font-semibold text-lg"></h3>
+                        <button onclick="closeXaiAlert()" class="text-slate-400 hover:text-white">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                    <p id="xaiRationale" class="text-slate-300 mb-3"></p>
+                    <div id="xaiMetrics" class="grid grid-cols-2 gap-3"></div>
+                    <div id="xaiAction" class="mt-4"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transaction History -->
+        <div class="glassmorphism rounded-2xl p-6 slide-up" style="animation-delay: 0.4s" id="historySection">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-white text-xl font-bold">Recent Transactions</h2>
+                <div class="flex items-center space-x-2">
+                    <button class="px-3 py-1 bg-indigo-500/20 text-indigo-400 rounded-lg text-sm">All</button>
+                    <button class="px-3 py-1 text-slate-400 hover:bg-white/5 rounded-lg text-sm">Sent</button>
+                    <button class="px-3 py-1 text-slate-400 hover:bg-white/5 rounded-lg text-sm">Received</button>
+                </div>
+            </div>
+
+            <!-- Transaction Table -->
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead>
+                        <tr class="border-b border-white/10">
+                            <th class="text-left text-slate-400 text-sm font-medium pb-3">Date</th>
+                            <th class="text-left text-slate-400 text-sm font-medium pb-3">Recipient</th>
+                            <th class="text-left text-slate-400 text-sm font-medium pb-3">Amount</th>
+                            <th class="text-left text-slate-400 text-sm font-medium pb-3">Risk Level</th>
+                            <th class="text-left text-slate-400 text-sm font-medium pb-3">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transactionList">
+                        <tr>
+                            <td colspan="5" class="text-center text-slate-400 py-8">
+                                <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                                <p>Loading transactions...</p>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Voice Recording Modal -->
+    <div id="voiceModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm hidden items-center justify-center z-50">
+        <div class="glassmorphism rounded-2xl p-8 max-w-md w-full mx-4 fade-in">
+            <div class="text-center">
+                <h2 class="text-white text-2xl font-bold mb-2">Voice Transfer</h2>
+                <p class="text-slate-400 mb-6" id="voiceInstructions">Speak your payment command clearly</p>
+
+                <!-- Microphone Animation -->
+                <div class="relative w-48 h-48 mx-auto mb-6">
+                    <div class="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500/30 to-purple-600/30 pulse-ring"></div>
+                    <div class="absolute inset-4 rounded-full bg-gradient-to-br from-indigo-500/20 to-purple-600/20 pulse-ring" style="animation-delay: 0.5s"></div>
+                    <div class="absolute inset-0 flex items-center justify-center">
+                        <div id="micIcon" class="w-24 h-24 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-full flex items-center justify-center pulse-mic">
+                            <i class="fas fa-microphone text-white text-4xl"></i>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="recordingTimer" class="hidden text-white text-lg font-mono mb-4">
+                    <i class="fas fa-circle text-red-500 animate-pulse mr-2"></i>
+                    <span id="timerDisplay">00:00</span>
+                </div>
+
+                <div id="voiceStatus" class="text-slate-300 mb-6 min-h-[60px]">
+                    Example: "Transfer 500 rupees to Rohan"
+                </div>
+
+                <div id="recordingControls" class="space-y-3">
+                    <button id="startRecordBtn" onclick="startRecording()" class="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:from-indigo-700 hover:to-purple-700 transition-all">
+                        <i class="fas fa-microphone mr-2"></i>Start Recording
+                    </button>
+                    <button id="stopRecordBtn" onclick="stopRecording()" class="hidden w-full py-3 bg-gradient-to-r from-red-600 to-rose-600 text-white rounded-xl font-semibold hover:from-red-700 hover:to-rose-700 transition-all">
+                        <i class="fas fa-stop mr-2"></i>Stop & Process
+                    </button>
+                    <button onclick="closeVoiceModal()" class="w-full py-3 bg-white/10 text-white rounded-xl font-semibold hover:bg-white/20 transition-all">
+                        Cancel
+                    </button>
+                </div>
+
+                <div id="processingIndicator" class="hidden">
+                    <div class="flex items-center justify-center space-x-2 text-indigo-400 mb-4">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <span>Processing your command...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
