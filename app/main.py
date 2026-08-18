@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from fastapi import BackgroundTasks, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from loguru import logger
 from starlette.middleware.base import RequestResponseEndpoint
@@ -84,6 +85,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.mount("/static", StaticFiles(directory="app/static"), name="static")
+
 
 @app.middleware("http")
 async def schedule_memory_optimization(
@@ -123,12 +126,6 @@ async def signin_page(request: Request):
 async def signup_page(request: Request):
     """Serve the sign-up page."""
     return templates.TemplateResponse("signup.html", {"request": request})
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_page(request: Request):
-    """Serve the user dashboard (old index.html)."""
-    return templates.TemplateResponse("index.html", {"request": request})
 
 
 @app.get("/enroll", response_class=HTMLResponse)

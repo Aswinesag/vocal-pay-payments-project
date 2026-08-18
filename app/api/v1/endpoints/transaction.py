@@ -22,7 +22,7 @@ from app.core.audio_dsp import detect_replay_attack
 from app.core.config import settings
 from app.core.converters import async_upload_to_numpy, async_upload_to_waveform
 from app.core.vector_index import search_voiceprint, VoiceprintIndexError
-from app.database.crud import create_transaction, freeze_transaction, get_active_transaction, invalidate_transaction
+from app.database.crud import create_transaction, freeze_transaction, get_active_transaction, get_transactions_by_user_id, invalidate_transaction
 from app.database.database import get_async_db
 from app.database.models import PendingTransaction, Transaction, User
 from app.services.ollama_service import OllamaService
@@ -32,6 +32,7 @@ from app.services.providers.provider_factory import (
     get_speaker_verification_provider,
 )
 from app.services.whisper_service import WhisperService
+from app.api.v1.endpoints.auth import get_current_user
 
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -215,6 +216,11 @@ async def initiate_transaction(
 
         # Verify speaker score meets threshold
         if speaker_score < settings.SPEAKER_PASS_THRESHOLD:
+            logger.warning(
+                "Voice identity rejected: best_score={:.6f}, threshold={:.6f}.",
+                speaker_score,
+                settings.SPEAKER_PASS_THRESHOLD,
+            )
             raise HTTPException(
                 status_code=404,
                 detail="No enrolled voice identity matched."
@@ -425,3 +431,88 @@ async def verify_transaction(
         await db.rollback()
         logger.bind(transaction_id=transaction_id, error=str(exc)).exception("Verification failed.")
         raise HTTPException(status_code=500, detail="Verification failed.") from exc
+
+
+@router.get("/history")
+async def get_transaction_history(
+    current_user: Annotated[User, Depends(get_current_user)],
+    db: Annotated[AsyncSession, Depends(get_async_db)],
+    limit: int = 20,
+    offset: int = 0,
+):
+    """
+    Retrieve paginated transaction history for the authenticated user.
+    
+    Query Parameters:
+        limit: Maximum number of transactions to return (default: 20, max: 100)
+        offset: Number of transactions to skip for pagination (default: 0)
+    
+    Returns:
+        JSON array of transaction objects ordered by most recent first.
+    """
+    # Validate pagination parameters
+    if limit < 1 or limit > 100:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Limit must be between 1 and 100"
+        )
+    
+    if offset < 0:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Offset must be non-negative"
+        )
+    
+    try:
+        # Fetch transactions from database using CRUD function
+        transactions = await get_transactions_by_user_id(
+            db,
+            current_user.user_id,
+            limit=limit,
+            offset=offset
+        )
+        
+        # Serialize transactions to JSON-friendly format
+        transaction_list = [
+            {
+                "transaction_id": tx.transaction_id,
+                "amount": tx.amount,
+                "status": tx.status,
+                "risk_level": tx.risk_level,
+                "success": tx.success,
+                "speaker_score": tx.speaker_score,
+                "face_score": tx.face_score,
+                "fraud_score": tx.fraud_score,
+                "xai_reason": tx.xai_reason,
+                "processing_time_ms": tx.processing_time_ms,
+                "replay_attack": tx.replay_attack,
+                "created_at": tx.created_at.isoformat() if tx.created_at else None,
+                "updated_at": tx.updated_at.isoformat() if tx.updated_at else None,
+            }
+            for tx in transactions
+        ]
+        
+        logger.bind(
+            user_id=current_user.user_id,
+            count=len(transaction_list),
+            limit=limit,
+            offset=offset
+        ).info("Transaction history retrieved successfully")
+        
+        return {
+            "success": True,
+            "transactions": transaction_list,
+            "count": len(transaction_list),
+            "limit": limit,
+            "offset": offset
+        }
+        
+    except Exception as exc:
+        logger.bind(
+            user_id=current_user.user_id,
+            error=str(exc)
+        ).exception("Failed to retrieve transaction history")
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to retrieve transaction history"
+        ) from exc

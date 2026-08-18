@@ -1,25 +1,40 @@
 // VocalPay Dashboard JavaScript
 
-// Application State
+// Application State (no more localStorage!)
 const AppState = {
-    token: localStorage.getItem('access_token'),
-    user: JSON.parse(localStorage.getItem('user') || 'null'),
+    user: null,  // Will be fetched from /me endpoint
     mediaRecorder: null,
     audioChunks: [],
     recordingStartTime: null,
     timerInterval: null
 };
 
-// Check authentication on load
-if (!AppState.token || !AppState.user) {
-    window.location.href = '/signin';
-}
-
 // Initialize dashboard
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    await fetchCurrentUser();  // Check auth via cookie
     displayUserInfo();
     loadTransactions();
 });
+
+// Fetch current user from backend (validates cookie)
+async function fetchCurrentUser() {
+    try {
+        const response = await fetch('/api/v1/users/me', {
+            credentials: 'include'  // Send cookies
+        });
+        
+        if (!response.ok) {
+            // Not authenticated, redirect to signin
+            window.location.href = '/signin';
+            return;
+        }
+        
+        AppState.user = await response.json();
+    } catch (error) {
+        console.error('Auth check failed:', error);
+        window.location.href = '/signin';
+    }
+}
 
 function displayUserInfo() {
     if (AppState.user) {
@@ -33,9 +48,16 @@ function displayUserInfo() {
     }
 }
 
-function logout() {
-    localStorage.removeItem('access_token');
-    localStorage.removeItem('user');
+async function logout() {
+    try {
+        // Call logout endpoint to clear cookie
+        await fetch('/api/v1/auth/logout', {
+            method: 'POST',
+            credentials: 'include'
+        });
+    } catch (error) {
+        console.error('Logout failed:', error);
+    }
     window.location.href = '/signin';
 }
 
@@ -148,7 +170,7 @@ async function processVoiceCommand() {
 
         const response = await fetch('/api/v1/transactions/initiate', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${AppState.token}` },
+            credentials: 'include',  // Send httpOnly cookie
             body: formData
         });
 
@@ -203,23 +225,117 @@ function closeXaiAlert() {
     document.getElementById('xaiAlert').classList.add('hidden');
 }
 
-async function loadTransactions() {
+async function loadTransactions(limit = 20, offset = 0) {
     const tbody = document.getElementById('transactionList');
-    const mocks = [
-        { date: '2026-08-12 10:30 AM', recipient: 'Rohan Kumar', amount: 500, risk_level: 'LOW', status: 'COMPLETED' },
-        { date: '2026-08-11 03:15 PM', recipient: 'Priya Sharma', amount: 1250, risk_level: 'MEDIUM', status: 'VERIFIED' }
-    ];
     
-    const riskColors = { LOW: 'bg-emerald-500/20 text-emerald-400', MEDIUM: 'bg-amber-500/20 text-amber-400', HIGH: 'bg-red-500/20 text-red-400' };
-    const statusColors = { COMPLETED: 'text-emerald-400', VERIFIED: 'text-blue-400' };
-    
-    tbody.innerHTML = mocks.map(tx => `
-        <tr class="border-b border-white/5 hover:bg-white/5">
-            <td class="py-4 text-slate-300 text-sm">${tx.date}</td>
-            <td class="py-4 text-white font-medium">${tx.recipient}</td>
-            <td class="py-4 text-white font-semibold">₹${tx.amount.toFixed(2)}</td>
-            <td class="py-4"><span class="px-2 py-1 ${riskColors[tx.risk_level]} rounded-full text-xs">${tx.risk_level}</span></td>
-            <td class="py-4 ${statusColors[tx.status]} font-medium"><i class="fas fa-check-circle mr-1"></i>${tx.status}</td>
-        </tr>
-    `).join('');
+    try {
+        // Fetch real transactions from backend API
+        const response = await fetch(`/api/v1/transactions/history?limit=${limit}&offset=${offset}`, {
+            method: 'GET',
+            credentials: 'include'  // Send httpOnly cookie
+        });
+        
+        if (!response.ok) {
+            if (response.status === 401) {
+                // Token expired, redirect to login
+                window.location.href = '/signin';
+                return;
+            }
+            throw new Error('Failed to load transaction history');
+        }
+        
+        const data = await response.json();
+        const transactions = data.transactions || [];
+        
+        // Check if no transactions exist
+        if (transactions.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5" class="py-8 text-center text-slate-400">
+                        <i class="fas fa-inbox text-4xl mb-3 block"></i>
+                        <p class="text-lg">No transactions yet</p>
+                        <p class="text-sm mt-2">Try making a voice transfer to see it here!</p>
+                    </td>
+                </tr>`;
+            return;
+        }
+        
+        // Color schemes for status and risk
+        const riskColors = { 
+            LOW: 'bg-emerald-500/20 text-emerald-400', 
+            MEDIUM: 'bg-amber-500/20 text-amber-400', 
+            HIGH: 'bg-red-500/20 text-red-400',
+            CRITICAL: 'bg-red-600/20 text-red-500'
+        };
+        const statusColors = { 
+            COMPLETED: 'text-emerald-400', 
+            VERIFIED: 'text-blue-400',
+            SUCCESS: 'text-emerald-400',
+            PENDING: 'text-amber-400',
+            FAILED: 'text-red-400'
+        };
+        
+        // Render transactions dynamically
+        tbody.innerHTML = transactions.map(tx => {
+            // Format date
+            const date = tx.created_at ? new Date(tx.created_at).toLocaleString('en-IN', {
+                year: 'numeric',
+                month: 'short',
+                day: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            }) : 'Unknown';
+            
+            // Transaction ID or system-generated
+            const recipient = tx.transaction_id ? tx.transaction_id.substring(0, 8) : 'Unknown';
+            
+            // Format amount
+            const amount = typeof tx.amount === 'number' ? tx.amount.toFixed(2) : '0.00';
+            
+            // Risk level with fallback
+            const riskLevel = tx.risk_level || 'UNKNOWN';
+            const riskColorClass = riskColors[riskLevel] || 'bg-slate-500/20 text-slate-400';
+            
+            // Status with fallback
+            const status = tx.status || 'UNKNOWN';
+            const statusColorClass = statusColors[status] || 'text-slate-400';
+            const statusIcon = tx.success ? 'fa-check-circle' : 'fa-times-circle';
+            
+            return `
+                <tr class="border-b border-white/5 hover:bg-white/5 transition-colors cursor-pointer" 
+                    onclick="showTransactionDetails('${tx.transaction_id}')"
+                    title="Click to view details">
+                    <td class="py-4 text-slate-300 text-sm">${date}</td>
+                    <td class="py-4 text-white font-medium">ID: ${recipient}</td>
+                    <td class="py-4 text-white font-semibold">₹${amount}</td>
+                    <td class="py-4">
+                        <span class="px-2 py-1 ${riskColorClass} rounded-full text-xs font-medium">
+                            ${riskLevel}
+                        </span>
+                    </td>
+                    <td class="py-4 ${statusColorClass} font-medium">
+                        <i class="fas ${statusIcon} mr-1"></i>${status}
+                    </td>
+                </tr>`;
+        }).join('');
+        
+        console.log(`✅ Loaded ${transactions.length} transactions (limit: ${limit}, offset: ${offset})`);
+        
+    } catch (error) {
+        console.error('❌ Failed to load transactions:', error);
+        tbody.innerHTML = `
+            <tr>
+                <td colspan="5" class="py-8 text-center text-red-400">
+                    <i class="fas fa-exclamation-triangle text-4xl mb-3 block"></i>
+                    <p class="text-lg">Failed to load transactions</p>
+                    <p class="text-sm mt-2">${error.message}</p>
+                </td>
+            </tr>`;
+    }
+}
+
+function showTransactionDetails(transactionId) {
+    // Placeholder function for future transaction detail modal
+    console.log('Transaction details:', transactionId);
+    alert(`Transaction ID: ${transactionId}\n\nDetailed view coming soon!`);
 }

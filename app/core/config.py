@@ -56,7 +56,7 @@ class Settings(BaseSettings):
 
     ROLLOFF_THRESHOLD: float = Field(default=2500.0, gt=0.0)
     CENTROID_THRESHOLD: float = Field(default=1800.0, gt=0.0)
-    SPEAKER_PASS_THRESHOLD: float = Field(default=0.75, ge=0.0, le=1.0)
+    SPEAKER_PASS_THRESHOLD: float = Field(default=0.70, ge=0.0, le=1.0)
     FACE_PASS_THRESHOLD: float = Field(default=0.80, ge=0.0, le=1.0)
     LIVENESS_CRITICAL_THRESHOLD: float = Field(
         default=0.40,

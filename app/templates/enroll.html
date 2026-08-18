@@ -1,11 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Biometric Enrollment - VocalPay</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
         body { font-family: 'Inter', sans-serif; }
@@ -145,7 +144,8 @@
             
             <div id="voice-error" class="hidden mt-4 p-4 bg-red-500/20 border border-red-500 rounded-xl">
                 <p class="text-red-400 text-sm"><i class="fas fa-exclamation-circle mr-2"></i><span id="voice-error-text"></span></p>
-        
+            </div>
+        </div>
     </div>
     
     <!-- Loading Overlay -->
@@ -218,7 +218,7 @@
                 document.getElementById('next-step-btn').classList.remove('hidden');
                 document.getElementById('next-step-btn').disabled = false;
             }, 'image/jpeg', 0.9);
-        }
+        } // capturePhoto function closing brace
         
         function retakePhoto() {
             faceSnapshot = null;
@@ -237,6 +237,7 @@
             document.getElementById('step2-icon').classList.remove('bg-slate-700', 'text-slate-400');
             document.getElementById('step2-icon').classList.add('bg-purple-600', 'text-white');
             document.getElementById('progress-bar').style.width = '50%';
+        }
         
         // Audio Recording Functions
         async function startRecording() {
@@ -333,7 +334,7 @@
                 if (response.ok) {
                     document.getElementById('progress-bar').style.width = '100%';
                     setTimeout(() => {
-                        alert('✅ Biometric enrollment successful!');
+                        alert('âœ… Biometric enrollment successful!');
                         window.location.href = '/dashboard';
                     }, 500);
                 } else {
@@ -353,10 +354,3 @@
     </script>
 </body>
 </html>
-
-        }
-
-            </div>
-        </div>
-
-

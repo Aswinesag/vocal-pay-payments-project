@@ -232,9 +232,11 @@ class VoiceprintIndex:
             best_index = int(indices[0][0])
             best_distance = float(distances[0][0])
 
-            # Convert L2 distance to cosine similarity
-            # After L2 normalization: cosine_sim = 1 - (L2_dist^2 / 2)
-            similarity = float(1.0 - (best_distance / 2.0))
+            # IndexHNSWFlat returns squared L2 distance. For unit vectors,
+            # raw cosine = 1 - (squared_l2 / 2). Map that cosine from
+            # [-1, 1] to the same [0, 1] scale used by SpeechBrainProvider.
+            cosine = float(1.0 - (best_distance / 2.0))
+            similarity = float((cosine + 1.0) / 2.0)
             similarity = max(0.0, min(1.0, similarity))
 
             user_id = self._user_ids[best_index]
@@ -275,4 +277,3 @@ __all__ = (
     "initialize_voiceprint_index",
     "search_voiceprint",
 )
-

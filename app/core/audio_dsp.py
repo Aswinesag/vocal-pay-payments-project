@@ -10,6 +10,7 @@ import numpy as np
 
 ROLLOFF_THRESHOLD = 4800.0
 CENTROID_THRESHOLD = 2700.0
+ANALYSIS_SAMPLE_RATE = 16_000
 
 
 def detect_replay_attack(audio_path: str) -> bool:
@@ -20,7 +21,7 @@ def detect_replay_attack(audio_path: str) -> bool:
 
     samples, sample_rate = librosa.load(
         path,
-        sr=None,
+        sr=ANALYSIS_SAMPLE_RATE,
         mono=True,
     )
     if sample_rate <= 0 or samples.size == 0:

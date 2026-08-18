@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from jose import JWTError
 from loguru import logger
@@ -160,20 +160,20 @@ async def signup(
 # ==========================================================
 
 async def get_current_user(
-    token: Annotated[str, Depends(oauth2_scheme)],
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> User:
-    """Dependency to extract and validate JWT token, returning authenticated User.
+    """Dependency to extract and validate JWT token from httpOnly cookie.
     
     Args:
-        token: JWT access token from Authorization header (Bearer scheme)
+        request: FastAPI Request object to access cookies
         db: Async database session
         
     Returns:
         Authenticated User object rehydrated from database
         
     Security Flow:
-        1. Extract token from Authorization: Bearer <token>
+        1. Extract token from httpOnly cookie (XSS-safe)
         2. Decode and validate JWT signature
         3. Check token expiration
         4. Extract user_id from 'sub' claim
@@ -196,6 +196,13 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
+    
+    # Extract token from httpOnly cookie
+    token = request.cookies.get("access_token")
+    
+    if not token:
+        logger.warning("No access_token cookie found")
+        raise credentials_exception
     
     try:
         # Decode and validate JWT token
@@ -248,12 +255,54 @@ async def get_current_active_verified_user(
     return current_user
 
 
-@router.post("/login", response_model=LoginResponse)
+# ==========================================================
+# User Info & Authentication Endpoints
+# ==========================================================
+
+@router.get("/me", response_model=UserResponse)
+async def get_current_user_info(
+    current_user: Annotated[User, Depends(get_current_user)],
+) -> UserResponse:
+    """Get current authenticated user information from httpOnly cookie.
+    
+    Returns user details for authenticated session.
+    Validates JWT token from cookie automatically.
+    """
+    return UserResponse.model_validate(current_user)
+
+
+@router.post("/logout")
+async def logout(response: Response) -> dict[str, str]:
+    """Logout user by clearing httpOnly cookie.
+    
+    Removes access_token cookie, effectively logging out the user.
+    """
+    response.delete_cookie(
+        key="access_token",
+        path="/",
+        domain=None,
+        secure=True,
+        httponly=True,
+        samesite="lax"
+    )
+    logger.info("User logged out successfully")
+    return {"message": "Logged out successfully"}
+
+
+@router.post("/login")
 async def login(
+    response: Response,
     form_data: Annotated[OAuth2PasswordRequestForm, Depends()],
     db: Annotated[AsyncSession, Depends(get_async_db)],
-) -> LoginResponse:
-    """Authenticate user and return JWT access token."""
+):
+    """Authenticate user and set secure httpOnly cookie with JWT token.
+    
+    Security Implementation:
+        - JWT token stored in httpOnly cookie (not accessible to JavaScript)
+        - Secure flag enforces HTTPS transmission only
+        - SameSite=lax prevents CSRF attacks
+        - No token in response body (defense-in-depth)
+    """
     try:
         # Find user by email (username field contains email)
         user = await db.scalar(
@@ -275,20 +324,33 @@ async def login(
             )
         
         # Create JWT access token
+        from app.core.config import settings
         access_token = create_access_token(data={"sub": user.user_id})
+        
+        # Set secure httpOnly cookie
+        response.set_cookie(
+            key="access_token",
+            value=access_token,
+            httponly=True,  # Not accessible to JavaScript (XSS protection)
+            secure=True,     # HTTPS only (set to False for local development)
+            samesite="lax",  # CSRF protection
+            max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Seconds
+            path="/",        # Available across entire domain
+        )
         
         # Update last login
         from app.database.models import utc_now_naive
         user.last_login_at = utc_now_naive()
         await db.commit()
         
-        logger.bind(user_id=user.user_id).info("Login successful")
+        logger.bind(user_id=user.user_id).info("Login successful - secure cookie set")
         
-        return LoginResponse(
-            access_token=access_token,
-            token_type="bearer",
-            user=UserResponse.model_validate(user),
-        )
+        # Return user data only (NO TOKEN in body)
+        return {
+            "success": True,
+            "message": "Authentication successful",
+            "user": UserResponse.model_validate(user).model_dump()
+        }
         
     except HTTPException:
         raise
