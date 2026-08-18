@@ -241,18 +241,25 @@ async def initiate_transaction(
         ).info("Voice-driven transaction command resolved.")
 
         if extracted_amount >= 500.00:
-            verification_secret = f"{secrets.randbelow(1_000_000):06d}"
+            # Generate randomized challenge phrase for voice verification
+            challenge_words = [
+                ["alpha", "bravo", "charlie", "delta", "echo"],
+                ["red", "blue", "green", "yellow", "purple"],
+                ["north", "south", "east", "west", "central"],
+                ["river", "mountain", "ocean", "forest", "desert"]
+            ]
+            challenge_phrase = " ".join(secrets.choice(word_list) for word_list in challenge_words)
+            
             pending = await freeze_transaction(
                 db,
                 user_id=resolved_user_id,
                 amount=extracted_amount,
                 status="PENDING_CHALLENGE",
-                verification_secret=verification_secret,
+                verification_secret=challenge_phrase,
             )
             logger.info(
-                f"🔐 SECURITY STEP-UP ACTIVATED: Dispatching secure 6-digit "
-                f"verification code token directly to user registered email "
-                f"endpoint: {user.email}"
+                f"🔐 SECURITY STEP-UP ACTIVATED: Generated voice challenge phrase "
+                f"for HIGH-risk transaction: {challenge_phrase}"
             )
             await db.commit()
             raise HTTPException(
@@ -262,9 +269,10 @@ async def initiate_transaction(
                     "status": pending.status,
                     "risk_tier": "HIGH",
                     "transaction_id": pending.transaction_id,
-                    "action": "SUBMIT_OTP_OR_FACE_VERIFICATION",
+                    "action": "VOICE_CHALLENGE",
+                    "challenge_phrase": challenge_phrase,
                     "expires_at": pending.expires_at.isoformat(),
-                    "rationale": "Transaction amount requires mandatory step-up verification.",
+                    "rationale": "Transaction amount requires mandatory voice challenge verification.",
                 },
             )
 
@@ -319,18 +327,22 @@ async def initiate_transaction(
                 detail={"risk_tier": "CRITICAL", "status": "BLOCKED"},
             )
 
-        verification_secret = f"{secrets.randbelow(1_000_000):06d}"
+        # Generate 6-digit OTP for MEDIUM risk
+        otp_code = f"{secrets.randbelow(1_000_000):06d}"
+        
+        # Determine status based on risk tier
+        status_value = "PENDING_OTP" if risk_tier == "MEDIUM" else "PENDING_VERIFICATION"
+        
         pending = await freeze_transaction(
             db,
             user_id=resolved_user_id,
             amount=extracted_amount,
-            status="PENDING_VERIFICATION",
-            verification_secret=verification_secret,
+            status=status_value,
+            verification_secret=otp_code,
         )
         logger.info(
-            f"🔐 SECURITY STEP-UP ACTIVATED: Dispatching secure 6-digit "
-            f"verification code token directly to user registered email "
-            f"endpoint: {user.email}"
+            f"🔐 SECURITY STEP-UP ACTIVATED ({risk_tier}): Generated OTP {otp_code} "
+            f"for user {user.email}"
         )
         await db.commit()
         raise HTTPException(
@@ -340,7 +352,8 @@ async def initiate_transaction(
                 "status": pending.status,
                 "risk_tier": risk_tier,
                 "transaction_id": pending.transaction_id,
-                "action": "SUBMIT_OTP_OR_FACE_VERIFICATION",
+                "action": "SUBMIT_OTP" if risk_tier == "MEDIUM" else "SUBMIT_VERIFICATION",
+                "otp_code": otp_code if risk_tier == "MEDIUM" else None,  # Include OTP in response (in production, send via email/SMS)
                 "expires_at": pending.expires_at.isoformat(),
                 "rationale": rationale,
             },
@@ -366,8 +379,9 @@ async def verify_transaction(
     db: Annotated[AsyncSession, Depends(get_async_db)],
     otp_code: Annotated[str | None, Form()] = None,
     photo_file: Annotated[UploadFile | None, File()] = None,
+    audio_file: Annotated[UploadFile | None, File()] = None,
 ) -> TransactionResponse:
-    """Consume an active OTP or biometric challenge exactly once."""
+    """Consume an active OTP, voice challenge, or biometric challenge exactly once."""
     try:
         frozen = await db.scalar(
             select(PendingTransaction).where(
@@ -382,8 +396,32 @@ async def verify_transaction(
             raise HTTPException(status_code=401, detail="Transaction is expired or inactive.")
 
         verified = False
+        
+        # Path 1: OTP Verification (MEDIUM risk)
         if otp_code is not None:
             verified = secrets.compare_digest(pending.verification_secret, otp_code)
+            logger.bind(transaction_id=transaction_id).info(f"OTP verification: {verified}")
+        
+        # Path 2: Voice Challenge Verification (HIGH risk)
+        elif audio_file is not None:
+            audio_waveform = await async_upload_to_waveform(audio_file)
+            transcription = str(await whisper_provider.transcribe(audio_waveform)).strip()
+            
+            # Compare transcription to challenge secret (case-insensitive, fuzzy match)
+            expected = pending.verification_secret.lower().strip()
+            actual = transcription.lower().strip()
+            
+            # Simple fuzzy matching (can be enhanced with Levenshtein distance)
+            verified = expected in actual or actual in expected
+            
+            logger.bind(
+                transaction_id=transaction_id,
+                expected=expected,
+                actual=actual,
+                verified=verified
+            ).info("Voice challenge verification completed")
+        
+        # Path 3: Face Verification (alternative to voice)
         elif photo_file is not None:
             image = await async_upload_to_numpy(photo_file)
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
