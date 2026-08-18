@@ -82,9 +82,10 @@ class BiometricInferenceProxy:
             **_vram_telemetry(),
         ).info("Biometric provider lazy initialization started.")
 
-        result = loader()
-        if inspect.isawaitable(result):
-            await result
+        if inspect.iscoroutinefunction(loader):
+            await loader()
+        else:
+            await asyncio.to_thread(loader)
 
         self._initialized = True
         logger.bind(

@@ -3,7 +3,7 @@
 **Document Class:** Immutable System Blueprint
 **Scope:** This document is the authoritative architectural specification for the VocalPay codebase. Any LLM coding agent, code-completion tool, or human contributor MUST read this document in full before proposing, generating, or modifying any code in this repository. Deviations from the constraints defined herein require an explicit, deliberate architectural decision — not an incidental one.
 
-**Status note:** Section 3 ("AI Hardware Shortcut") documents a *locked design specification* for a component that is not yet implemented in the current codebase (no `librosa`-based DSP gate module exists at the time of writing). It is recorded here as binding intent for future implementation, not as a description of shipped behavior. All other sections describe a mixture of already-implemented structure (database layer) and locked specification for scaffolded components (biometric services, agentic reasoning layer).
+**Status note:** This document describes the shipped voice-driven transaction flow. The CPU DSP gate, biometric provider layer, local ASR, agentic reasoning, and disk-backed two-step state machine are implemented components.
 
 ---
 
@@ -68,13 +68,14 @@ Purpose: holds a transaction in a frozen, resumable state while it awaits MEDIUM
 | `amount` | Float | Transaction amount under evaluation |
 | `risk_level` | String(20) | Assigned tier: `MEDIUM` or `HIGH` (LOW resolves immediately and never reaches this table; CRITICAL is blocked before reaching this table) |
 | `status` | String(30) | Lifecycle state, e.g. `PENDING_OTP`, `PENDING_CHALLENGE` |
-| `verification_secret` | String(255) | The OTP digit string (MEDIUM) or the randomized challenge phrase (HIGH) the client must satisfy |
-| `expires_at` | DateTime(tz-aware) | Hard 5-minute freeze window; enforced server-side on every `/verify` call |
+| `verification_secret` | String(255) | A keyed HMAC-SHA256 OTP digest (MEDIUM) or randomized challenge phrase (HIGH) |
+| `expires_at` | DateTime (UTC-naive storage) | Hard 5-minute freeze window; enforced server-side on every `/verify` call |
+| `verification_attempts` / `max_verification_attempts` | Integer | Persisted retry counter and terminal retry limit |
 | `speaker_score` | Float | Speaker-verification similarity captured at initiation |
 | `face_score` | Float | Face-verification similarity captured at initiation |
 | `fraud_score` | Float | Agentic risk-reasoning output captured at initiation |
 | `replay_attack` | Boolean | Whether the DSP replay gate flagged the initiating audio (informational; CRITICAL results never reach this table) |
-| `created_at` / `updated_at` | DateTime(tz-aware) | Standard timestamp mixin |
+| `created_at` / `updated_at` | DateTime (UTC-naive storage) | Standard timestamp mixin |
 
 Indexes: `idx_pending_status` (status), `idx_pending_expires` (expires_at) — both required to keep expiry sweeps and status-based lookups cheap as pending volume grows.
 
@@ -95,7 +96,7 @@ Purpose: the immutable financial record. A row is written here only once a trans
 | `xai_reason` | Text | The explainable-AI rationale string produced by the local agent — mandatory, never null, always human-readable |
 | `processing_time_ms` | Float | End-to-end latency, retained for performance auditing on constrained hardware |
 | `replay_attack` | Boolean | Historical flag carried through from initiation |
-| `created_at` / `updated_at` | DateTime(tz-aware) | Standard timestamp mixin |
+| `created_at` / `updated_at` | DateTime (UTC-naive storage) | Standard timestamp mixin |
 
 Indexes: `idx_transaction_status`, `idx_transaction_risk` — support reporting and dashboarding queries without full table scans.
 
@@ -143,9 +144,9 @@ Any future implementation of this gate must preserve this ordering guarantee: **
 
 | Model | Device | Precision | Role |
 |---|---|---|---|
-| InsightFace | CUDA (`onnxruntime-gpu`) | Default ONNX precision | Facial embedding extraction / liveness-adjacent similarity scoring |
+| InsightFace | CUDA preferred, CPU fallback (`onnxruntime-gpu`) | Default ONNX precision | Facial embedding extraction / liveness-adjacent similarity scoring |
 | SpeechBrain | CPU | Default | Speaker embedding extraction / voiceprint similarity scoring (ECAPA-TDNN class model) |
-| Faster-Whisper | CUDA | **FP16** | Challenge-phrase transcription, invoked only during HIGH-risk Step 2 verification |
+| Faster-Whisper | CUDA preferred, CPU fallback | **FP16 on CUDA** | Voice-command transcription at initiation and challenge transcription during HIGH-risk Step 2 |
 
 FP16 precision for Faster-Whisper is a deliberate VRAM-reduction choice — half the activation and weight memory footprint of FP32 — and must not be silently upgraded to FP32 without re-validating peak VRAM usage against the 4 GB ceiling.
 
@@ -157,7 +158,7 @@ Concretely:
 
 - InsightFace inference must fully complete (including releasing any intermediate CUDA allocations it does not need to retain) before SpeechBrain or Faster-Whisper inference begins.
 - SpeechBrain, although CPU-bound, is still included in the sequential lock ordering — the constraint is about deterministic, non-overlapping pipeline stages, not exclusively about GPU contention. This avoids unpredictable system RAM pressure spikes when CPU and GPU stages overlap on a 16 GB RAM ceiling.
-- Faster-Whisper (CUDA, FP16) is only ever invoked during the HIGH-risk Step 2 `/verify` call, and only after any prior GPU model from the same request lifecycle has released its allocation.
+- Faster-Whisper is invoked during voice-driven Step 1 command parsing and HIGH-risk Step 2 challenge verification, always within the same process-wide inference lock.
 - The lock construct guarding model invocation must be thread-safe and must serialize access across concurrent incoming requests, not just within a single request — two simultaneous HIGH-risk verifications must not be permitted to run Faster-Whisper concurrently.
 
 Any code proposing `asyncio.gather`, thread pools, or process pools that would allow two GPU-bound model calls to execute concurrently is non-compliant and must be rejected.
@@ -179,7 +180,7 @@ The fraud-reasoning agent is a stock, locally-hosted **Ollama `Llama-3.2-3B`** m
 | Tier | Resolution Path | Downstream Action |
 |---|---|---|
 | **LOW** | Immediate | Transaction auto-approved and written directly to the `Transaction` ledger. No freeze, no step-up. |
-| **MEDIUM** | Step-up required | `PendingTransaction` frozen with `status = PENDING_OTP`; 6-digit numeric OTP generated and stored server-side as `verification_secret`. |
+| **MEDIUM** | Step-up required | `PendingTransaction` frozen with `status = PENDING_OTP`; a 6-digit OTP is emailed and only its keyed HMAC-SHA256 digest is persisted. |
 | **HIGH** | Step-up required | `PendingTransaction` frozen with `status = PENDING_CHALLENGE`; randomized text challenge phrase generated and stored server-side as `verification_secret`. |
 | **CRITICAL** | Immediate hard block | Request rejected with HTTP 401 at the DSP gate (Section 3) or post-biometric fraud-reasoning stage; recorded as a `FraudEvent`, never a `Transaction`. |
 
@@ -191,12 +192,13 @@ The system exposes exactly two endpoints governing the transaction lifecycle. Th
 
 #### Step 1 — `POST /api/v1/transaction/initiate`
 
-Ingests `user_id`, `amount`, live audio, and a photo. Executes, in strict order:
+Ingests one live audio upload. Identity and amount are derived from that voice command. Executes, in strict order:
 
 1. CPU DSP replay gate (Section 3) — CRITICAL short-circuits here.
-2. Sequential biometric pipeline (Section 4) — InsightFace → SpeechBrain.
-3. Agentic risk reasoning (Section 5.1) over the resulting biometric telemetry.
-4. Branch on assigned tier:
+2. Faster-Whisper transcription extracts the spoken payment amount.
+3. SpeechBrain extracts the live voiceprint; FAISS selects the best enrolled identity above the configured speaker threshold.
+4. Agentic risk reasoning (Section 5.1) evaluates the amount and real speaker telemetry. Face and liveness scores remain zero because no face model runs during initiation.
+5. Branch on assigned tier:
    - **LOW** → write `Transaction`, return success immediately.
    - **MEDIUM / HIGH** → write `PendingTransaction` via `crud.py` with a 5-minute `expires_at` window, then the connection is dropped. The client does not hold an open connection awaiting step-up; it must reconnect for Step 2.
 
@@ -204,7 +206,7 @@ Ingests `user_id`, `amount`, live audio, and a photo. Executes, in strict order:
 
 Client submits `transaction_id` plus proof of step-up. Server queries `crud.py` to rehydrate the frozen `PendingTransaction` context. Behavior branches on the persisted `status`:
 
-- **`PENDING_OTP` (MEDIUM):** the submitted OTP is validated via direct string comparison against `verification_secret`. No model inference occurs on this path — it is intentionally the cheapest possible verification path.
+- **`PENDING_OTP` (MEDIUM):** the submitted OTP is converted to a keyed HMAC-SHA256 digest and compared in constant time with `verification_secret`. No model inference occurs on this path.
 - **`PENDING_CHALLENGE` (HIGH):** a freshly submitted voice clip is transcribed via Faster-Whisper (CUDA, FP16 — Section 4.1) and string-matched against the persisted challenge phrase in `verification_secret`.
 
 On successful verification (either path):

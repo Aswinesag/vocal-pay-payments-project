@@ -19,7 +19,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 // Fetch current user from backend (validates cookie)
 async function fetchCurrentUser() {
     try {
-        const response = await fetch('/api/v1/users/me', {
+        const response = await fetch('/api/v1/auth/me', {
             credentials: 'include'  // Send cookies
         });
         
@@ -346,7 +346,7 @@ function showTransactionDetails(transactionId) {
 let currentVerification={transactionId:null,riskTier:null,challengePhrase:null,otpCode:null,expiresAt:null};
 let challengeMediaRecorder=null,challengeAudioChunks=[],challengeRecordingTimer=null,challengeSeconds=0;
 
-function showVerificationModal(data){currentVerification={transactionId:data.transaction_id,riskTier:data.risk_tier,challengePhrase:data.challenge_phrase||null,otpCode:data.otp_code||null,expiresAt:data.expires_at};const modal=document.getElementById('verifyModal'),otpCard=document.getElementById('otpCard'),challengeCard=document.getElementById('challengeCard'),description=document.getElementById('verifyDescription');otpCard.classList.add('hidden');challengeCard.classList.add('hidden');if(data.risk_tier==='MEDIUM'){description.textContent='Enter the 6-digit code';otpCard.classList.remove('hidden');if(data.otp_code)document.getElementById('otpDisplay').innerHTML=`Code: <span class="font-mono text-lg text-indigo-400">${data.otp_code}</span>`;const otpInput=document.getElementById('otpInput');otpInput.value='';setTimeout(()=>otpInput.focus(),300)}else if(data.risk_tier==='HIGH'){description.textContent='Speak the phrase';challengeCard.classList.remove('hidden');document.getElementById('challengePhrase').textContent=data.challenge_phrase}startExpiryCountdown(data.expires_at);modal.classList.remove('hidden');modal.classList.add('flex')}
+function showVerificationModal(data){currentVerification={transactionId:data.transaction_id,riskTier:data.risk_tier,challengePhrase:data.challenge_phrase||null,expiresAt:data.expires_at};const modal=document.getElementById('verifyModal'),otpCard=document.getElementById('otpCard'),challengeCard=document.getElementById('challengeCard'),description=document.getElementById('verifyDescription');otpCard.classList.add('hidden');challengeCard.classList.add('hidden');if(data.risk_tier==='MEDIUM'){description.textContent=data.otp_sent_to_email?'Enter the 6-digit code sent to your registered email':'Enter your 6-digit verification code';otpCard.classList.remove('hidden');document.getElementById('otpDisplay').textContent='Check your registered email for the verification code.';const otpInput=document.getElementById('otpInput');otpInput.value='';setTimeout(()=>otpInput.focus(),300)}else if(data.risk_tier==='HIGH'){description.textContent='Speak the phrase';challengeCard.classList.remove('hidden');document.getElementById('challengePhrase').textContent=data.challenge_phrase}startExpiryCountdown(data.expires_at);modal.classList.remove('hidden');modal.classList.add('flex')}
 
 function closeVerifyModal(){document.getElementById('verifyModal').classList.add('hidden');if(challengeMediaRecorder&&challengeMediaRecorder.state==='recording')challengeMediaRecorder.stop();clearInterval(challengeRecordingTimer)}
 

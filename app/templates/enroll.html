@@ -305,18 +305,12 @@
         }
         
         async function submitEnrollment() {
-            const user = JSON.parse(localStorage.getItem('user') || '{}');
-            const token = localStorage.getItem('access_token');
-            
             if (!faceSnapshot || !audioBlob) {
                 alert('Please complete both face and voice capture');
                 return;
             }
             
             const formData = new FormData();
-            formData.append('full_name', user.full_name || 'User');
-            formData.append('email', user.email || '');
-            formData.append('phone_number', user.phone_number || '');
             formData.append('photo_file', faceSnapshot, 'face.jpg');
             formData.append('audio_file', audioBlob, 'voice.webm');
             
@@ -325,7 +319,7 @@
             try {
                 const response = await fetch('/api/v1/users/enroll', {
                     method: 'POST',
-                    headers: { 'Authorization': `Bearer ${token}` },
+                    credentials: 'include',
                     body: formData
                 });
                 

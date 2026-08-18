@@ -302,6 +302,18 @@ class PendingTransaction(
         nullable=False,
     )
 
+    verification_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        nullable=False,
+    )
+
+    max_verification_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=5,
+        nullable=False,
+    )
+
     # ------------------------------------------------------
     # Verification
     # ------------------------------------------------------
@@ -479,10 +491,10 @@ class FraudEvent(
     # User Information
     # ------------------------------------------------------
 
-    user_id: Mapped[str] = mapped_column(
+    user_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("users.user_id"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
 
@@ -544,7 +556,7 @@ class FraudEvent(
     # Relationships
     # ------------------------------------------------------
 
-    user: Mapped["User"] = relationship(
+    user: Mapped["User | None"] = relationship(
         back_populates="fraud_events"
     )
 

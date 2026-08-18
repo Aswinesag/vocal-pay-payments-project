@@ -34,7 +34,13 @@ class InsightFaceProvider(FaceVerificationProvider):
             raise ValueError("InsightFace requires CUDAExecutionProvider.")
 
         self._model_name = _model_name or settings.INSIGHTFACE_MODEL
-        self._app = self._get_model()
+        self._device = _device
+        self._app: FaceAnalysis | None = None
+
+    def _ensure_model_loaded(self) -> None:
+        """Load the shared model when called inside the inference coordinator."""
+        if self._app is None:
+            self._app = self._get_model()
 
     def _get_model(self) -> FaceAnalysis:
         """Load and prepare the process-wide CUDA model exactly once."""
@@ -107,6 +113,9 @@ class InsightFaceProvider(FaceVerificationProvider):
             if matrix.size == 0:
                 raise ValueError("Face input image cannot be empty.")
 
+            self._ensure_model_loaded()
+            if self._app is None:
+                raise FaceProviderError("InsightFace model is unavailable.")
             faces = self._app.get(np.ascontiguousarray(matrix))
             if not faces:
                 raise ValueError("No face detected in the supplied image.")
@@ -189,21 +198,31 @@ class InsightFaceProvider(FaceVerificationProvider):
         live_embedding: object,
     ) -> FaceVerificationResult:
         """Verify a live face embedding against its enrolled reference."""
-        enrolled = np.asarray(enrolled_embedding, dtype=np.float32).reshape(-1).tolist()
-        live = np.asarray(live_embedding, dtype=np.float32).reshape(-1).tolist()
-        confidence = self.calculate_similarity(enrolled, live)
-        return FaceVerificationResult(
-            verified=confidence >= settings.FACE_PASS_THRESHOLD,
-            confidence=confidence,
-            face_detected=True,
-            liveness_checked=False,
-            provider=self.name,
-            metadata={"provider": "CUDAExecutionProvider", "device": "cuda"},
-        )
+        try:
+            enrolled = np.asarray(
+                enrolled_embedding, dtype=np.float32
+            ).reshape(-1).tolist()
+            live = np.asarray(live_embedding, dtype=np.float32).reshape(-1).tolist()
+            confidence = self.calculate_similarity(enrolled, live)
+            return FaceVerificationResult(
+                verified=confidence >= settings.FACE_PASS_THRESHOLD,
+                confidence=confidence,
+                face_detected=True,
+                liveness_checked=False,
+                provider=self.name,
+                metadata={"configured_device": self._device},
+            )
+        except FaceProviderError:
+            raise
+        except Exception as exc:
+            raise FaceProviderError("Face verification failed.") from exc
 
     async def detect_faces(self, *, image: object) -> tuple[FaceDetection, ...]:
         """Return portable bounding boxes and landmarks for detected faces."""
         matrix = np.asarray(image)
+        self._ensure_model_loaded()
+        if self._app is None:
+            raise FaceProviderError("InsightFace model is unavailable.")
         faces = self._app.get(matrix)
         return tuple(
             FaceDetection(
@@ -217,5 +236,9 @@ class InsightFaceProvider(FaceVerificationProvider):
         )
 
     async def shutdown(self) -> None:
-        """Retain the process-wide CUDA singleton until process termination."""
-        logger.info("InsightFace CUDA singleton retained for process lifetime.")
+        """Release the shared model so it can be initialized again safely."""
+        cls = type(self)
+        with cls._model_lock:
+            self._app = None
+            cls._model = None
+        logger.info("InsightFace model reference released.")

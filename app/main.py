@@ -22,6 +22,8 @@ from app.core.constants import PROJECT_VERSION
 from app.core.memory_manager import optimize_hardware_memory
 from app.core.vector_index import initialize_voiceprint_index
 from app.database.database import close_database, get_async_db, initialize_database
+from app.middleware.security_audit import SecurityAuditMiddleware
+from app.services.providers.provider_factory import BiometricProviderFactory
 
 
 @asynccontextmanager
@@ -59,6 +61,10 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         raise
     finally:
         try:
+            await BiometricProviderFactory.shutdown()
+        except Exception:
+            logger.exception("Biometric provider shutdown failed.")
+        try:
             await close_database()
         except Exception:
             logger.bind(application=settings.APP_NAME).exception(
@@ -84,6 +90,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(SecurityAuditMiddleware)
 
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 

@@ -4,9 +4,7 @@ from typing import TypeVar
 from uuid import uuid4
 
 from loguru import logger
-from sqlalchemy import select
-from sqlalchemy import delete
-from sqlalchemy import func
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.models import (
@@ -406,6 +404,12 @@ async def freeze_transaction(
     amount: float,
     status: str,
     verification_secret: str,
+    *,
+    risk_level: str = "PENDING",
+    speaker_score: float = 0.0,
+    face_score: float = 0.0,
+    fraud_score: float = 0.0,
+    replay_attack: bool = False,
 ) -> PendingTransaction:
     """Persist an active step-up transaction with a strict five-minute TTL."""
     now = utc_now_naive()
@@ -417,11 +421,13 @@ async def freeze_transaction(
         verification_secret=verification_secret,
         expires_at=now + timedelta(minutes=5),
         is_active=True,
-        risk_level="PENDING",
-        speaker_score=0.0,
-        face_score=0.0,
-        fraud_score=0.0,
-        replay_attack=False,
+        verification_attempts=0,
+        max_verification_attempts=5,
+        risk_level=risk_level,
+        speaker_score=speaker_score,
+        face_score=face_score,
+        fraud_score=fraud_score,
+        replay_attack=replay_attack,
     )
 
     try:
@@ -459,10 +465,10 @@ async def get_active_transaction(
             return None
 
         if pending.expires_at <= utc_now_naive():
-            pending.is_active = False
+            await db.delete(pending)
             await db.flush()
             logger.bind(transaction_id=pending.transaction_id).warning(
-                "Expired step-up transaction deactivated."
+                "Expired step-up transaction deleted."
             )
             return None
 

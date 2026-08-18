@@ -1,4 +1,4 @@
-"""Deterministic integration tests for the stateless VocalPay pipeline."""
+"""Deterministic integration tests for the current VocalPay API lifecycle."""
 
 from __future__ import annotations
 
@@ -13,16 +13,17 @@ import httpx
 import numpy as np
 import pytest
 import pytest_asyncio
-from loguru import logger
 from sqlalchemy import delete
 
+from app.core.config import settings
 from app.database import crud
 from app.database.database import AsyncSessionLocal, initialize_database
 from app.database.models import AuditLog, FraudEvent, PendingTransaction, Transaction, User
 from app.main import app
 
 
-TEST_USER_ID = "integration_test_01"
+TEST_USER_ID = "integration-test-user"
+TEST_EMAIL = "integration_test@vocalpay.com"
 
 
 def _jpeg_bytes() -> bytes:
@@ -47,9 +48,9 @@ def _wav_bytes() -> bytes:
     return buffer.getvalue()
 
 
-@pytest_asyncio.fixture(scope="function", autouse=True)
+@pytest_asyncio.fixture(autouse=True)
 async def isolated_pipeline_state() -> AsyncIterator[None]:
-    """Initialize tables and isolate records owned by this test module."""
+    """Remove deterministic integration records before and after every test."""
     await initialize_database()
     async with AsyncSessionLocal() as session:
         await session.execute(delete(AuditLog).where(AuditLog.user_id == TEST_USER_ID))
@@ -58,11 +59,11 @@ async def isolated_pipeline_state() -> AsyncIterator[None]:
             delete(PendingTransaction).where(PendingTransaction.user_id == TEST_USER_ID)
         )
         await session.execute(delete(Transaction).where(Transaction.user_id == TEST_USER_ID))
-        await session.execute(delete(User).where(User.user_id == TEST_USER_ID))
+        await session.execute(
+            delete(User).where((User.user_id == TEST_USER_ID) | (User.email == TEST_EMAIL))
+        )
         await session.commit()
-
     yield
-
     async with AsyncSessionLocal() as session:
         await session.execute(delete(AuditLog).where(AuditLog.user_id == TEST_USER_ID))
         await session.execute(delete(FraudEvent).where(FraudEvent.user_id == TEST_USER_ID))
@@ -70,41 +71,54 @@ async def isolated_pipeline_state() -> AsyncIterator[None]:
             delete(PendingTransaction).where(PendingTransaction.user_id == TEST_USER_ID)
         )
         await session.execute(delete(Transaction).where(Transaction.user_id == TEST_USER_ID))
-        await session.execute(delete(User).where(User.user_id == TEST_USER_ID))
+        await session.execute(
+            delete(User).where((User.user_id == TEST_USER_ID) | (User.email == TEST_EMAIL))
+        )
         await session.commit()
 
 
 @pytest_asyncio.fixture
 async def async_client() -> AsyncIterator[httpx.AsyncClient]:
-    """Yield a reusable in-process asynchronous API client."""
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://test",
-    ) as client:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
+
+
+async def _create_authenticated_user(client: httpx.AsyncClient) -> str:
+    original_cookie_secure = settings.COOKIE_SECURE
+    settings.COOKIE_SECURE = False
+    try:
+        signup = await client.post(
+            "/api/v1/auth/signup",
+            json={
+                "full_name": "Test Automation",
+                "email": TEST_EMAIL,
+                "phone_number": "+1999888888",
+                "password": "IntegrationPassword123!",
+            },
+        )
+        assert signup.status_code == 201, signup.text
+        user_id = signup.json()["user"]["user_id"]
+        login = await client.post(
+            "/api/v1/auth/login",
+            data={"username": TEST_EMAIL, "password": "IntegrationPassword123!"},
+        )
+        assert login.status_code == 200, login.text
+        return str(user_id)
+    finally:
+        settings.COOKIE_SECURE = original_cookie_secure
 
 
 @pytest.mark.asyncio
 async def test_user_enrollment_pipeline(async_client: httpx.AsyncClient) -> None:
-    """Enroll deterministic biometric templates without loading neural models."""
-    logger.info("Starting deterministic user enrollment integration stage.")
+    user_id = await _create_authenticated_user(async_client)
     face_proxy = SimpleNamespace(
         extract_embedding=AsyncMock(return_value=[0.02] * 512),
     )
     voice_proxy = SimpleNamespace(
         extract_embedding=AsyncMock(return_value=[0.04] * 192),
     )
-
     with (
-        patch(
-            "app.services.providers.provider_factory.get_face_verification_provider",
-            return_value=face_proxy,
-        ),
-        patch(
-            "app.services.providers.provider_factory.get_speaker_verification_provider",
-            return_value=voice_proxy,
-        ),
         patch(
             "app.api.v1.endpoints.user.get_face_verification_provider",
             return_value=face_proxy,
@@ -116,12 +130,6 @@ async def test_user_enrollment_pipeline(async_client: httpx.AsyncClient) -> None
     ):
         response = await async_client.post(
             "/api/v1/users/enroll",
-            data={
-                "user_id": TEST_USER_ID,
-                "full_name": "Test Automation",
-                "email": "integration_test@vocalpay.com",
-                "phone_number": "+1999888888",
-            },
             files={
                 "audio_file": ("voice.wav", io.BytesIO(_wav_bytes()), "audio/wav"),
                 "photo_file": ("face.jpg", io.BytesIO(_jpeg_bytes()), "image/jpeg"),
@@ -129,27 +137,27 @@ async def test_user_enrollment_pipeline(async_client: httpx.AsyncClient) -> None
         )
 
     assert response.status_code == 201, response.text
-    payload = response.json()
-    assert payload["success"] is True
-    assert payload["user_id"] == TEST_USER_ID
-    assert payload["speaker_embedding_dimensions"] == 192
-    assert payload["face_embedding_dimensions"] == 512
-    logger.success("User enrollment integration stage completed.")
+    assert response.json() == {
+        "status": "SUCCESS",
+        "user_id": user_id,
+        "message": "Biometric card identity generated.",
+    }
 
 
 @pytest.mark.asyncio
 async def test_conditional_transaction_step_up_loop(
     async_client: httpx.AsyncClient,
 ) -> None:
-    """Freeze, rehydrate, consume, and replay-check one step-up transaction."""
-    logger.info("Starting deterministic transaction step-up integration stage.")
+    from app.core.security import hash_password
+
     async with AsyncSessionLocal() as session:
         session.add(
             User(
                 user_id=TEST_USER_ID,
                 full_name="Test Automation",
-                email="auto@vocalpay.test",
-                phone_number="+19998888",
+                email=TEST_EMAIL,
+                phone_number="+1999888888",
+                hashed_password=hash_password("IntegrationPassword123!"),
                 speaker_embedding=[0.04] * 192,
                 face_embedding=[0.02] * 512,
                 is_active=True,
@@ -162,87 +170,75 @@ async def test_conditional_transaction_step_up_loop(
 
     voice_proxy = SimpleNamespace(
         extract_embedding=AsyncMock(return_value=[0.04] * 192),
-        verify_speaker=AsyncMock(
-            return_value=SimpleNamespace(confidence=0.82, verified=True)
-        ),
     )
-
     with (
-        patch(
-            "app.services.providers.provider_factory.get_speaker_verification_provider",
-            return_value=voice_proxy,
-        ),
         patch(
             "app.api.v1.endpoints.transaction.get_speaker_verification_provider",
             return_value=voice_proxy,
         ),
         patch(
+            "app.api.v1.endpoints.transaction.search_voiceprint",
+            new=AsyncMock(return_value=(TEST_USER_ID, 0.92)),
+        ),
+        patch(
             "app.api.v1.endpoints.transaction.detect_replay_attack",
             return_value=False,
         ),
-        patch.object(
-            __import__(
-                "app.api.v1.endpoints.transaction",
-                fromlist=["ollama_service"],
-            ).ollama_service,
-            "evaluate_transaction_context",
-            new=AsyncMock(
-                return_value={
-                    "risk_tier": "HIGH",
-                    "explainable_ai_rationale": "Deterministic step-up required.",
-                }
+        patch(
+            "app.api.v1.endpoints.transaction.whisper_provider",
+            new=SimpleNamespace(
+                transcribe=AsyncMock(
+                    return_value="Authorize transaction for 650 dollars"
+                )
             ),
         ),
     ):
         initiate_response = await async_client.post(
             "/api/v1/transactions/initiate",
-            data={"user_id": TEST_USER_ID, "amount": "650.00"},
-            files={
-                "audio_file": ("verify.wav", io.BytesIO(_wav_bytes()), "audio/wav")
-            },
+            headers={"X-User-ID": TEST_USER_ID},
+            files={"audio_file": ("verify.wav", io.BytesIO(_wav_bytes()), "audio/wav")},
         )
 
     assert initiate_response.status_code == 403, initiate_response.text
-    initiate_payload = initiate_response.json()["detail"]
-    transaction_id = initiate_payload["transaction_id"]
-    assert initiate_payload["risk_tier"] == "HIGH"
+    detail = initiate_response.json()["detail"]
+    transaction_id = detail["transaction_id"]
+    assert detail["status"] == "PENDING_CHALLENGE"
+    assert detail["risk_tier"] == "HIGH"
 
     async with AsyncSessionLocal() as session:
         frozen = await crud.get_pending_transaction_by_transaction_id(
-            session,
-            transaction_id,
+            session, transaction_id
         )
         assert frozen is not None
-        verification_secret = frozen.verification_secret
-        assert frozen.is_active is True
+        challenge_phrase = frozen.verification_secret
+        assert frozen.risk_level == "HIGH"
+        assert frozen.speaker_score == pytest.approx(0.92)
 
-    verify_response = await async_client.post(
-        "/api/v1/transactions/verify",
-        data={
-            "transaction_id": transaction_id,
-            "otp_code": verification_secret,
-        },
-    )
-    assert verify_response.status_code == 200, verify_response.text
-    verify_payload = verify_response.json()
-    assert verify_payload["success"] is True
-    assert verify_payload["status"] == "SUCCESS"
-    assert verify_payload["transaction_id"] == transaction_id
-
-    async with AsyncSessionLocal() as session:
-        consumed = await crud.get_pending_transaction_by_transaction_id(
-            session,
-            transaction_id,
+    with patch(
+        "app.api.v1.endpoints.transaction.whisper_provider",
+        new=SimpleNamespace(transcribe=AsyncMock(return_value=challenge_phrase)),
+    ):
+        verify_response = await async_client.post(
+            "/api/v1/transactions/verify",
+            headers={"X-User-ID": TEST_USER_ID},
+            data={"transaction_id": transaction_id},
+            files={"audio_file": ("challenge.wav", io.BytesIO(_wav_bytes()), "audio/wav")},
         )
-        assert consumed is not None
-        assert consumed.is_active is False
+
+    assert verify_response.status_code == 200, verify_response.text
+    async with AsyncSessionLocal() as session:
+        assert (
+            await crud.get_pending_transaction_by_transaction_id(session, transaction_id)
+            is None
+        )
+        completed = await crud.get_transaction_by_transaction_id(session, transaction_id)
+        assert completed is not None
+        assert completed.status == "COMPLETED"
+        assert completed.risk_level == "HIGH"
 
     replay_response = await async_client.post(
         "/api/v1/transactions/verify",
-        data={
-            "transaction_id": transaction_id,
-            "otp_code": verification_secret,
-        },
+        headers={"X-User-ID": TEST_USER_ID},
+        data={"transaction_id": transaction_id, "otp_code": "000000"},
     )
-    assert replay_response.status_code == 401
-    logger.success("Transaction step-up integration stage completed.")
+    assert replay_response.status_code == 404

@@ -24,6 +24,12 @@ passlib[bcrypt]==1.7.4
 python-jose[cryptography]==3.3.0
 
 # ==========================================================
+# Email Delivery
+# ==========================================================
+aiosmtplib==3.0.2
+jinja2==3.1.4
+
+# ==========================================================
 # Database Layer (SQLite)
 # ==========================================================
 sqlalchemy==2.0.31
@@ -63,7 +69,6 @@ av==18.0.0
 soundfile==0.12.1
 librosa==0.10.2.post1
 ffmpeg-python==0.2.0
-silero-vad==5.1.2
 
 # ==========================================================
 # Speaker Verification
@@ -75,6 +80,8 @@ speechbrain==1.0.2
 # ==========================================================
 opencv-python==4.10.0.84
 insightface==0.7.3
+# This GPU distribution provides the `onnxruntime` import namespace. Do not
+# install the CPU distribution alongside it; both wheels own the same files.
 onnxruntime-gpu==1.19.2
 onnx==1.16.2
 

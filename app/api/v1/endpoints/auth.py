@@ -30,6 +30,7 @@ from app.core.security import (
     hash_password,
     verify_password,
 )
+from app.core.config import settings
 from app.database.database import get_async_db
 from app.database.models import User
 from app.database.schemas import UserCreate, UserResponse
@@ -281,7 +282,7 @@ async def logout(response: Response) -> dict[str, str]:
         key="access_token",
         path="/",
         domain=None,
-        secure=True,
+        secure=settings.COOKIE_SECURE,
         httponly=True,
         samesite="lax"
     )
@@ -324,7 +325,6 @@ async def login(
             )
         
         # Create JWT access token
-        from app.core.config import settings
         access_token = create_access_token(data={"sub": user.user_id})
         
         # Set secure httpOnly cookie
@@ -332,7 +332,7 @@ async def login(
             key="access_token",
             value=access_token,
             httponly=True,  # Not accessible to JavaScript (XSS protection)
-            secure=True,     # HTTPS only (set to False for local development)
+            secure=settings.COOKIE_SECURE,
             samesite="lax",  # CSRF protection
             max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # Seconds
             path="/",        # Available across entire domain
@@ -360,4 +360,3 @@ async def login(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication failed",
         ) from exc
-

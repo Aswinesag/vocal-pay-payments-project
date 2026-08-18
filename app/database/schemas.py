@@ -721,7 +721,7 @@ class FraudEventResponse(BaseSchema):
 
     transaction_id: str
 
-    user_id: str
+    user_id: str | None = None
 
     event_type: str
 
@@ -748,7 +748,7 @@ class FraudEventCreate(BaseSchema):
 
     transaction_id: str
 
-    user_id: str
+    user_id: str | None = None
 
     event_type: str
 

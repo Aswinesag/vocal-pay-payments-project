@@ -66,6 +66,25 @@ class Settings(BaseSettings):
     STEP_UP_TIMEOUT_SECONDS: int = Field(default=300, gt=0)
 
     # ------------------------------------------------------
+    # Email / SMTP Configuration
+    # ------------------------------------------------------
+    SMTP_HOST: str = Field(default="smtp.gmail.com", min_length=1)
+    SMTP_PORT: int = Field(default=587, gt=0)
+    SMTP_USERNAME: str = Field(default="", description="SMTP username/email")
+    SMTP_PASSWORD: str = Field(default="", description="SMTP password/app password")
+    SMTP_FROM_EMAIL: str = Field(
+        default="noreply@vocalpay.com",
+        min_length=1,
+        description="Sender email address"
+    )
+    SMTP_FROM_NAME: str = Field(default="VocalPay Security", min_length=1)
+    SMTP_USE_TLS: bool = Field(default=True)
+    COOKIE_SECURE: bool = Field(
+        default=False,
+        description="Require HTTPS when transmitting authentication cookies",
+    )
+
+    # ------------------------------------------------------
     # Security & Authentication
     # ------------------------------------------------------
 

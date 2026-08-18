@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import secrets
+import hashlib
+import hmac
 import re
+import secrets
 import uuid
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -22,9 +24,15 @@ from app.core.audio_dsp import detect_replay_attack
 from app.core.config import settings
 from app.core.converters import async_upload_to_numpy, async_upload_to_waveform
 from app.core.vector_index import search_voiceprint, VoiceprintIndexError
-from app.database.crud import create_transaction, freeze_transaction, get_active_transaction, get_transactions_by_user_id, invalidate_transaction
+from app.database.crud import (
+    create_fraud_event,
+    create_transaction,
+    freeze_transaction,
+    get_active_transaction,
+    get_transactions_by_user_id,
+)
 from app.database.database import get_async_db
-from app.database.models import PendingTransaction, Transaction, User
+from app.database.models import FraudEvent, PendingTransaction, Transaction, User
 from app.services.ollama_service import OllamaService
 from app.services.providers.provider_factory import (
     BiometricInferenceProxy,
@@ -32,6 +40,7 @@ from app.services.providers.provider_factory import (
     get_speaker_verification_provider,
 )
 from app.services.whisper_service import WhisperService
+from app.services.email_service import EmailServiceError, send_otp_email
 from app.api.v1.endpoints.auth import get_current_user
 
 
@@ -47,10 +56,11 @@ class _FasterWhisperProxyAdapter:
     def transcribe(self, waveform: np.ndarray) -> str:
         """Transcribe one waveform using the existing ASR service."""
         service = WhisperService()
-        try:
-            return service.transcribe_audio(waveform)
-        finally:
-            service.release_model()
+        return service.transcribe_audio(waveform)
+
+    async def shutdown(self) -> None:
+        """Release the cached ASR model during application shutdown."""
+        WhisperService().release_model()
 
 
 whisper_provider = BiometricInferenceProxy(
@@ -88,6 +98,44 @@ _NUMBER_WORDS: dict[str, int] = {
     "eighty": 80,
     "ninety": 90,
 }
+
+
+def _otp_digest(otp_code: str) -> str:
+    """Return a keyed digest suitable for persisted OTP verification."""
+    return hmac.new(
+        settings.JWT_SECRET_KEY.encode("utf-8"),
+        otp_code.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+async def _record_critical_fraud_event(
+    db: AsyncSession,
+    *,
+    user_id: str | None,
+    reason: str,
+    replay_attack: bool,
+    speaker_score: float | None = None,
+) -> None:
+    """Persist a terminal security block without changing its response path."""
+    event = FraudEvent(
+        transaction_id=f"FRD-{uuid.uuid4().hex.upper()}",
+        user_id=user_id,
+        event_type="REPLAY_ATTACK" if replay_attack else "CRITICAL_RISK_BLOCK",
+        risk_level="CRITICAL",
+        blocked=True,
+        speaker_score=speaker_score,
+        face_score=None,
+        fraud_score=None,
+        reason=reason,
+        replay_attack=replay_attack,
+    )
+    try:
+        await create_fraud_event(db, event)
+        await db.commit()
+    except Exception as exc:
+        await db.rollback()
+        logger.bind(error=str(exc)).exception("Critical fraud event persistence failed")
 
 
 def _extract_transaction_amount(transcription: str) -> float:
@@ -160,6 +208,12 @@ async def initiate_transaction(
 
         if detect_replay_attack(str(audio_path)):
             logger.warning("DSP replay gate blocked voice-driven transaction.")
+            await _record_critical_fraud_event(
+                db,
+                user_id=None,
+                reason="CPU DSP gate detected a probable audio replay attack.",
+                replay_attack=True,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"risk_tier": "CRITICAL", "status": "BLOCKED"},
@@ -178,7 +232,7 @@ async def initiate_transaction(
         # Extract live speaker embedding using SpeechBrain (CPU)
         voice_provider = get_speaker_verification_provider()
         live_embedding = await voice_provider.extract_embedding(waveform)
-        
+
         # Rapid O(log n) voice identity resolution via FAISS HNSW index
         try:
             resolved_user_id, speaker_score = await search_voiceprint(live_embedding)
@@ -256,11 +310,13 @@ async def initiate_transaction(
                 amount=extracted_amount,
                 status="PENDING_CHALLENGE",
                 verification_secret=challenge_phrase,
+                risk_level="HIGH",
+                speaker_score=speaker_score,
             )
-            logger.info(
-                f"🔐 SECURITY STEP-UP ACTIVATED: Generated voice challenge phrase "
-                f"for HIGH-risk transaction: {challenge_phrase}"
-            )
+            logger.bind(
+                transaction_id=pending.transaction_id,
+                user_id=resolved_user_id,
+            ).info("HIGH-risk voice challenge persisted")
             await db.commit()
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
@@ -322,38 +378,107 @@ async def initiate_transaction(
                 transaction_id=transaction_record.transaction_id,
             )
         if risk_tier not in {"MEDIUM", "HIGH"}:
+            await _record_critical_fraud_event(
+                db,
+                user_id=resolved_user_id,
+                reason="Agentic risk evaluation returned a terminal critical block.",
+                replay_attack=False,
+                speaker_score=speaker_score,
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail={"risk_tier": "CRITICAL", "status": "BLOCKED"},
             )
 
+        if risk_tier == "HIGH":
+            challenge_words = [
+                ["alpha", "bravo", "charlie", "delta", "echo"],
+                ["red", "blue", "green", "yellow", "purple"],
+                ["north", "south", "east", "west", "central"],
+                ["river", "mountain", "ocean", "forest", "desert"],
+            ]
+            challenge_phrase = " ".join(
+                secrets.choice(word_list) for word_list in challenge_words
+            )
+            pending = await freeze_transaction(
+                db,
+                user_id=resolved_user_id,
+                amount=extracted_amount,
+                status="PENDING_CHALLENGE",
+                verification_secret=challenge_phrase,
+                risk_level="HIGH",
+                speaker_score=speaker_score,
+                fraud_score=float(decision.get("fraud_score", 0.0)),
+            )
+            await db.commit()
+            logger.bind(
+                transaction_id=pending.transaction_id,
+                user_id=resolved_user_id,
+            ).info("HIGH-risk voice challenge persisted")
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "success": False,
+                    "status": pending.status,
+                    "risk_tier": "HIGH",
+                    "transaction_id": pending.transaction_id,
+                    "action": "VOICE_CHALLENGE",
+                    "challenge_phrase": challenge_phrase,
+                    "expires_at": pending.expires_at.isoformat(),
+                    "rationale": rationale,
+                },
+            )
+
         # Generate 6-digit OTP for MEDIUM risk
         otp_code = f"{secrets.randbelow(1_000_000):06d}"
-        
-        # Determine status based on risk tier
-        status_value = "PENDING_OTP" if risk_tier == "MEDIUM" else "PENDING_VERIFICATION"
         
         pending = await freeze_transaction(
             db,
             user_id=resolved_user_id,
             amount=extracted_amount,
-            status=status_value,
-            verification_secret=otp_code,
-        )
-        logger.info(
-            f"🔐 SECURITY STEP-UP ACTIVATED ({risk_tier}): Generated OTP {otp_code} "
-            f"for user {user.email}"
+            status="PENDING_OTP",
+            verification_secret=_otp_digest(otp_code),
+            risk_level="MEDIUM",
+            speaker_score=speaker_score,
+            fraud_score=float(decision.get("fraud_score", 0.0)),
         )
         await db.commit()
+
+        # Delivery is awaited so its outcome is known before returning a challenge.
+        try:
+            delivered = await send_otp_email(
+                recipient_email=user.email,
+                recipient_name=user.full_name,
+                otp_code=otp_code,
+                amount=extracted_amount,
+                expires_minutes=5,
+            )
+            if not delivered:
+                raise EmailServiceError("OTP email delivery was not confirmed.")
+            logger.bind(transaction_id=pending.transaction_id).info(
+                "OTP delivered to the user's registered email"
+            )
+        except EmailServiceError as email_error:
+            await db.delete(pending)
+            await db.commit()
+            logger.bind(
+                transaction_id=pending.transaction_id,
+                error=str(email_error),
+            ).error("OTP delivery failed; pending transaction invalidated")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Verification email could not be delivered. Please try again.",
+            ) from email_error
+
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail={
                 "success": False,
                 "status": pending.status,
-                "risk_tier": risk_tier,
+                "risk_tier": "MEDIUM",
                 "transaction_id": pending.transaction_id,
-                "action": "SUBMIT_OTP" if risk_tier == "MEDIUM" else "SUBMIT_VERIFICATION",
-                "otp_code": otp_code if risk_tier == "MEDIUM" else None,  # Include OTP in response (in production, send via email/SMS)
+                "action": "SUBMIT_OTP",
+                "otp_sent_to_email": True,
                 "expires_at": pending.expires_at.isoformat(),
                 "rationale": rationale,
             },
@@ -382,6 +507,8 @@ async def verify_transaction(
     audio_file: Annotated[UploadFile | None, File()] = None,
 ) -> TransactionResponse:
     """Consume an active OTP, voice challenge, or biometric challenge exactly once."""
+    verification_started_at = perf_counter()
+    final_face_score = 0.0
     try:
         frozen = await db.scalar(
             select(PendingTransaction).where(
@@ -393,13 +520,17 @@ async def verify_transaction(
 
         pending = await get_active_transaction(db, frozen.verification_secret)
         if pending is None or pending.transaction_id != transaction_id:
+            await db.commit()
             raise HTTPException(status_code=401, detail="Transaction is expired or inactive.")
 
         verified = False
         
         # Path 1: OTP Verification (MEDIUM risk)
-        if otp_code is not None:
-            verified = secrets.compare_digest(pending.verification_secret, otp_code)
+        if otp_code is not None and pending.status == "PENDING_OTP":
+            verified = secrets.compare_digest(
+                pending.verification_secret,
+                _otp_digest(otp_code),
+            )
             logger.bind(transaction_id=transaction_id).info(f"OTP verification: {verified}")
         
         # Path 2: Voice Challenge Verification (HIGH risk)
@@ -447,12 +578,44 @@ async def verify_transaction(
                     enrolled_embedding=user.face_embedding,
                     live_embedding=live_embedding,
                 )
+                final_face_score = float(face_result.confidence)
                 verified = bool(face_result.verified)
 
         if not verified:
-            raise HTTPException(status_code=401, detail="Verification failed.")
+            pending.verification_attempts += 1
+            attempts_remaining = max(
+                0,
+                pending.max_verification_attempts - pending.verification_attempts,
+            )
+            if attempts_remaining == 0:
+                await db.delete(pending)
+            else:
+                await db.flush()
+            await db.commit()
+            raise HTTPException(
+                status_code=401,
+                detail={
+                    "message": "Verification failed.",
+                    "attempts_remaining": attempts_remaining,
+                },
+            )
 
-        await invalidate_transaction(db, pending)
+        transaction_record = Transaction(
+            transaction_id=pending.transaction_id,
+            user_id=pending.user_id,
+            amount=pending.amount,
+            status="COMPLETED",
+            risk_level=pending.risk_level,
+            success=True,
+            speaker_score=pending.speaker_score,
+            face_score=max(pending.face_score, final_face_score),
+            fraud_score=pending.fraud_score,
+            xai_reason=f"{pending.risk_level} step-up verification completed.",
+            processing_time_ms=(perf_counter() - verification_started_at) * 1000.0,
+            replay_attack=pending.replay_attack,
+        )
+        await create_transaction(db, transaction_record)
+        await db.delete(pending)
         await db.commit()
         logger.bind(transaction_id=transaction_id).info("Transaction finalized.")
         return TransactionResponse(

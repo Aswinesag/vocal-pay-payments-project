@@ -32,7 +32,12 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
             raise VoiceValidationError("SpeechBrain must execute on the CPU.")
 
         self._device = "cpu"
-        self._classifier = self._get_classifier()
+        self._classifier: EncoderClassifier | None = None
+
+    def _ensure_model_loaded(self) -> None:
+        """Load the shared checkpoint inside the inference coordinator."""
+        if self._classifier is None:
+            self._classifier = self._get_classifier()
 
     @classmethod
     def _get_classifier(cls) -> EncoderClassifier:
@@ -93,6 +98,9 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
                     "Waveform contains non-finite sample values."
                 )
 
+            self._ensure_model_loaded()
+            if self._classifier is None:
+                raise VoiceProviderError("SpeechBrain classifier is unavailable.")
             tensor = torch.from_numpy(np.ascontiguousarray(samples)).unsqueeze(0)
             with torch.inference_mode():
                 encoded = self._classifier.encode_batch(tensor.to("cpu"))
@@ -184,5 +192,9 @@ class SpeechBrainProvider(SpeakerVerificationProvider):
             raise VoiceProviderError("Speaker verification failed.") from exc
 
     async def shutdown(self) -> None:
-        """Retain the process-wide singleton until process termination."""
-        logger.info("SpeechBrain singleton retained for process lifetime.")
+        """Release the shared classifier so it can be initialized again."""
+        cls = type(self)
+        with cls._model_lock:
+            self._classifier = None
+            cls._model = None
+        logger.info("SpeechBrain model reference released.")

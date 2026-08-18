@@ -77,13 +77,14 @@ class SecurityAuditMiddleware(BaseHTTPMiddleware):
         content_type = request.headers.get("content-type", "").casefold()
 
         try:
-            body = await request.body()
             payload: dict[str, Any] = {}
-            if body and "application/json" in content_type:
+            if "application/json" in content_type:
+                body = await request.body()
                 decoded = json.loads(body)
                 if isinstance(decoded, dict):
                     payload = decoded
-            elif body and "application/x-www-form-urlencoded" in content_type:
+            elif "application/x-www-form-urlencoded" in content_type:
+                body = await request.body()
                 fields = parse_qs(body.decode("utf-8", errors="strict"), keep_blank_values=False)
                 payload = {key: values[0] for key, values in fields.items() if values}
 
