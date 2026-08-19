@@ -6,7 +6,7 @@ import io
 import wave
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import cv2
 import httpx
@@ -24,6 +24,23 @@ from app.main import app
 
 TEST_USER_ID = "integration-test-user"
 TEST_EMAIL = "integration_test@vocalpay.com"
+
+
+def test_whisper_adapter_releases_model_after_transcription() -> None:
+    from app.api.v1.endpoints.transaction import _FasterWhisperProxyAdapter
+
+    service = MagicMock()
+    service.transcribe_audio.return_value = "authorize transaction for 150 rupees"
+    with patch(
+        "app.api.v1.endpoints.transaction.WhisperService",
+        return_value=service,
+    ):
+        result = _FasterWhisperProxyAdapter().transcribe(
+            np.zeros(16_000, dtype=np.float32)
+        )
+
+    assert result == "authorize transaction for 150 rupees"
+    service.release_model.assert_called_once_with()
 
 
 def _jpeg_bytes() -> bytes:

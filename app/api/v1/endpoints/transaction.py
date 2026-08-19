@@ -65,9 +65,12 @@ class _FasterWhisperProxyAdapter:
     name = "FasterWhisper"
 
     def transcribe(self, waveform: np.ndarray) -> str:
-        """Transcribe one waveform using the existing ASR service."""
+        """Transcribe once and release CUDA residency before the next AI stage."""
         service = WhisperService()
-        return service.transcribe_audio(waveform)
+        try:
+            return service.transcribe_audio(waveform)
+        finally:
+            service.release_model()
 
     async def shutdown(self) -> None:
         """Release the cached ASR model during application shutdown."""
@@ -146,12 +149,14 @@ def _lookup_geoip_country(client_ip: str) -> str:
 async def _resolve_network_country(request: Request) -> str:
     """Resolve a safe network country, trusting proxy headers only when enabled."""
     peer_ip = request.client.host if request.client is not None else ""
+    cloudflare_ip = request.headers.get("CF-Connecting-IP")
     forwarded_for = request.headers.get("X-Forwarded-For")
-    client_ip = (
-        forwarded_for.split(",", maxsplit=1)[0].strip()
-        if settings.TRUST_PROXY_HEADERS and forwarded_for
-        else peer_ip
-    )
+    if settings.TRUST_PROXY_HEADERS and cloudflare_ip:
+        client_ip = cloudflare_ip.strip()
+    elif settings.TRUST_PROXY_HEADERS and forwarded_for:
+        client_ip = forwarded_for.split(",", maxsplit=1)[0].strip()
+    else:
+        client_ip = peer_ip
     if client_ip.casefold() in {"127.0.0.1", "localhost", "::1"}:
         return "India"
     try:
