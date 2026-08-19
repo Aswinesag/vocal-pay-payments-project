@@ -83,6 +83,10 @@ class Settings(BaseSettings):
         default=False,
         description="Require HTTPS when transmitting authentication cookies",
     )
+    TRUST_PROXY_HEADERS: bool = Field(
+        default=False,
+        description="Trust client IP forwarding headers from a controlled reverse proxy",
+    )
 
     # ------------------------------------------------------
     # Security & Authentication

@@ -64,6 +64,8 @@
                 </div>
             </div>
         </div>
+
+        <div id="xai-feedback-card" class="hidden rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5 mb-6 text-amber-300"></div>
     </nav>
 
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -243,6 +245,7 @@
 
                 <!-- OTP Input Card (MEDIUM Risk) -->
                 <div id="otpCard" class="hidden">
+                    <div id="otp-verification-modal">
                     <div class="bg-white/10 rounded-xl p-6 mb-6">
                         <i class="fas fa-key text-indigo-400 text-4xl mb-4"></i>
                         <p class="text-white font-semibold mb-4">Enter 6-Digit Code</p>
@@ -259,6 +262,7 @@
                     <button onclick="submitOTP()" class="w-full py-3 bg-gradient-to-r from-indigo-600 to-purple-600 text-white rounded-xl font-semibold hover:from-indigo-700 hover:to-purple-700 transition-all mb-3">
                         <i class="fas fa-check mr-2"></i>Verify Code
                     </button>
+                    </div>
                 </div>
 
                 <!-- Voice Challenge Card (HIGH Risk) -->
@@ -271,6 +275,13 @@
                         </p>
                         <p class="text-slate-400 text-sm">Record your voice clearly saying this exact phrase</p>
                     </div>
+
+                    <div class="mb-4 overflow-hidden rounded-xl border border-white/20 bg-black">
+                        <video id="challengeVideo" class="hidden w-full" autoplay muted playsinline></video>
+                        <p id="challengeCameraHint" class="p-3 text-sm text-slate-400">
+                            Your camera will capture a fresh liveness frame while you speak.
+                        </p>
+                    </div>
                     
                     <!-- Recording Status -->
                     <div id="challengeRecordingTimer" class="hidden text-white text-lg font-mono mb-4">
@@ -279,7 +290,7 @@
                     </div>
                     
                     <button id="startChallengeBtn" onclick="startChallengeRecording()" class="w-full py-3 bg-gradient-to-r from-amber-600 to-orange-600 text-white rounded-xl font-semibold hover:from-amber-700 hover:to-orange-700 transition-all mb-3">
-                        <i class="fas fa-microphone mr-2"></i>Start Recording
+                        <i class="fas fa-microphone mr-2"></i>Start Voice + Liveness Check
                     </button>
                     <button id="stopChallengeBtn" onclick="stopChallengeRecording()" class="hidden w-full py-3 bg-gradient-to-r from-red-600 to-rose-600 text-white rounded-xl font-semibold hover:from-red-700 hover:to-rose-700 transition-all mb-3">
                         <i class="fas fa-stop mr-2"></i>Stop & Verify
@@ -299,6 +310,6 @@
         </div>
     </div>
 
-    <script src="/static/js/dashboard.js"></script>
+    <script src="/static/js/dashboard.js?v={{ asset_version }}-network-risk"></script>
 </body>
 </html>

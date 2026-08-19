@@ -144,7 +144,13 @@ async def enroll_page(request: Request):
 @app.get("/dashboard", response_class=HTMLResponse)
 async def dashboard_page(request: Request):
     """Serve the main financial dashboard interface."""
-    return templates.TemplateResponse("dashboard.html", {"request": request})
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {
+            "request": request,
+            "asset_version": PROJECT_VERSION,
+        },
+    )
 
 
 @app.get("/health", response_model=dict[str, str])

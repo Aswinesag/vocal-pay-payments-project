@@ -16,6 +16,7 @@ INITIATE_URL = "http://127.0.0.1:8000/api/v1/transactions/initiate"
 VERIFY_URL = "http://127.0.0.1:8000/api/v1/transactions/verify"
 VOICE_PATH = Path("temp_checkout_voice.wav")
 FACE_PATH = Path("temp_checkout_face.jpg")
+CHALLENGE_VOICE_PATH = Path("temp_challenge_voice.wav")
 SAMPLE_RATE = 16_000
 RECORDING_SECONDS = 4
 STEP_UP_STATUSES = {"PENDING_CHALLENGE", "PENDING_VERIFICATION"}
@@ -102,6 +103,20 @@ async def run_live_transaction() -> None:
             raise RuntimeError("Step-up response did not contain a transaction ID.")
 
         print(f"Step-up authentication required for {transaction_id}.")
+        challenge_phrase = detail.get("challenge_phrase")
+        if not isinstance(challenge_phrase, str) or not challenge_phrase:
+            raise RuntimeError("HIGH-risk response did not include a challenge phrase.")
+        print(f"Speak this challenge phrase: {challenge_phrase}")
+        time.sleep(0.5)
+        challenge_recording = sd.rec(
+            int(RECORDING_SECONDS * SAMPLE_RATE),
+            samplerate=SAMPLE_RATE,
+            channels=1,
+            dtype="float32",
+        )
+        sd.wait()
+        wavfile.write(CHALLENGE_VOICE_PATH, SAMPLE_RATE, challenge_recording)
+
         camera = cv2.VideoCapture(0)
         if not camera.isOpened():
             camera.release()
@@ -117,17 +132,25 @@ async def run_live_transaction() -> None:
             camera.release()
             print("Webcam released.")
 
-        print("Submitting webcam step-up verification...")
-        with FACE_PATH.open("rb") as photo_stream:
+        print("Submitting spoken challenge and webcam liveness verification...")
+        with (
+            FACE_PATH.open("rb") as photo_stream,
+            CHALLENGE_VOICE_PATH.open("rb") as challenge_audio_stream,
+        ):
             verify_response = await client.post(
                 VERIFY_URL,
                 data={"transaction_id": transaction_id},
                 files={
+                    "audio_file": (
+                        CHALLENGE_VOICE_PATH.name,
+                        challenge_audio_stream,
+                        "audio/wav",
+                    ),
                     "photo_file": (
                         FACE_PATH.name,
                         photo_stream,
                         "image/jpeg",
-                    )
+                    ),
                 },
             )
 
@@ -135,12 +158,12 @@ async def run_live_transaction() -> None:
         print(verify_response.text)
         if verify_response.status_code == httpx.codes.UNAUTHORIZED:
             print(
-                "🚨 STEP-UP VERIFICATION DENIED: No valid matching face was "
-                "detected. The transaction remains incomplete."
+                "🚨 STEP-UP VERIFICATION DENIED: The spoken challenge or "
+                "facial liveness check failed. The transaction remains incomplete."
             )
             return
         verify_response.raise_for_status()
-        print("Transaction finalized successfully after webcam verification.")
+        print("Transaction finalized after voice challenge and liveness verification.")
 
 
 if __name__ == "__main__":

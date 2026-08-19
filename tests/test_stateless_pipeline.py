@@ -104,6 +104,10 @@ async def _create_authenticated_user(client: httpx.AsyncClient) -> str:
             data={"username": TEST_EMAIL, "password": "IntegrationPassword123!"},
         )
         assert login.status_code == 200, login.text
+        assert "access_token" in client.cookies
+        current_user = await client.get("/api/v1/auth/me")
+        assert current_user.status_code == 200, current_user.text
+        assert current_user.json()["user_id"] == user_id
         return str(user_id)
     finally:
         settings.COOKIE_SECURE = original_cookie_secure
@@ -204,6 +208,7 @@ async def test_conditional_transaction_step_up_loop(
     transaction_id = detail["transaction_id"]
     assert detail["status"] == "PENDING_CHALLENGE"
     assert detail["risk_tier"] == "HIGH"
+    assert detail["expires_at"].endswith("Z")
 
     async with AsyncSessionLocal() as session:
         frozen = await crud.get_pending_transaction_by_transaction_id(
@@ -214,15 +219,41 @@ async def test_conditional_transaction_step_up_loop(
         assert frozen.risk_level == "HIGH"
         assert frozen.speaker_score == pytest.approx(0.92)
 
-    with patch(
-        "app.api.v1.endpoints.transaction.whisper_provider",
-        new=SimpleNamespace(transcribe=AsyncMock(return_value=challenge_phrase)),
+    missing_liveness_response = await async_client.post(
+        "/api/v1/transactions/verify",
+        headers={"X-User-ID": TEST_USER_ID},
+        data={"transaction_id": transaction_id},
+        files={
+            "audio_file": ("challenge.wav", io.BytesIO(_wav_bytes()), "audio/wav")
+        },
+    )
+    assert missing_liveness_response.status_code == 422
+
+    with (
+        patch(
+            "app.api.v1.endpoints.transaction.whisper_provider",
+            new=SimpleNamespace(transcribe=AsyncMock(return_value=challenge_phrase)),
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction.liveness_preprocessor",
+            new=SimpleNamespace(
+                prepare_frame=lambda image: image,
+                normalize_intensity=lambda image: image.astype(np.float32) / 255.0,
+            ),
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction.liveness_detector",
+            new=SimpleNamespace(analyze_liveness=lambda image: 0.90),
+        ),
     ):
         verify_response = await async_client.post(
             "/api/v1/transactions/verify",
             headers={"X-User-ID": TEST_USER_ID},
             data={"transaction_id": transaction_id},
-            files={"audio_file": ("challenge.wav", io.BytesIO(_wav_bytes()), "audio/wav")},
+            files={
+                "audio_file": ("challenge.wav", io.BytesIO(_wav_bytes()), "audio/wav"),
+                "photo_file": ("liveness.jpg", io.BytesIO(_jpeg_bytes()), "image/jpeg"),
+            },
         )
 
     assert verify_response.status_code == 200, verify_response.text
@@ -242,3 +273,89 @@ async def test_conditional_transaction_step_up_loop(
         data={"transaction_id": transaction_id, "otp_code": "000000"},
     )
     assert replay_response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_foreign_network_country_forces_medium_otp(
+    async_client: httpx.AsyncClient,
+) -> None:
+    from app.core.security import hash_password
+
+    async with AsyncSessionLocal() as session:
+        session.add(
+            User(
+                user_id=TEST_USER_ID,
+                full_name="Test Automation",
+                email=TEST_EMAIL,
+                phone_number="+1999888888",
+                hashed_password=hash_password("IntegrationPassword123!"),
+                speaker_embedding=[0.04] * 192,
+                face_embedding=[0.02] * 512,
+                is_active=True,
+                is_verified=True,
+                failed_attempts=0,
+                preferred_language="en",
+            )
+        )
+        await session.commit()
+
+    with (
+        patch(
+            "app.api.v1.endpoints.transaction.get_speaker_verification_provider",
+            return_value=SimpleNamespace(
+                extract_embedding=AsyncMock(return_value=[0.04] * 192)
+            ),
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction.search_voiceprint",
+            new=AsyncMock(return_value=(TEST_USER_ID, 0.92)),
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction.detect_replay_attack",
+            return_value=False,
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction.whisper_provider",
+            new=SimpleNamespace(
+                transcribe=AsyncMock(return_value="Authorize transaction for 150 rupees")
+            ),
+        ),
+        patch(
+            "app.api.v1.endpoints.transaction._resolve_network_country",
+            new=AsyncMock(return_value="Germany"),
+        ),
+        patch.object(
+            __import__(
+                "app.api.v1.endpoints.transaction",
+                fromlist=["ollama_service"],
+            ).ollama_service,
+            "evaluate_transaction_context",
+            new=AsyncMock(
+                return_value={
+                    "risk_tier": "LOW",
+                    "explainable_ai_rationale": "Normal telemetry is low risk.",
+                }
+            ),
+        ),
+        patch("app.api.v1.endpoints.transaction.secrets.randbelow", return_value=123456),
+        patch(
+            "app.api.v1.endpoints.transaction.send_otp_email",
+            new=AsyncMock(return_value=True),
+        ),
+    ):
+        initiation = await async_client.post(
+            "/api/v1/transactions/initiate",
+            files={"audio_file": ("command.wav", io.BytesIO(_wav_bytes()), "audio/wav")},
+        )
+
+    assert initiation.status_code == 403, initiation.text
+    detail = initiation.json()["detail"]
+    assert detail["risk_tier"] == "MEDIUM"
+    assert detail["status"] == "PENDING_OTP"
+    assert "Germany" in detail["rationale"]
+
+    verification = await async_client.post(
+        "/api/v1/transactions/verify",
+        data={"transaction_id": detail["transaction_id"], "otp_code": "123456"},
+    )
+    assert verification.status_code == 200, verification.text

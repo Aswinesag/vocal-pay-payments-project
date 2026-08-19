@@ -2,19 +2,21 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import re
 import secrets
 import uuid
+from datetime import datetime, timezone
+from ipaddress import ip_address
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from time import perf_counter
-from typing import Annotated, Any
+from typing import Annotated
 
-import cv2
 import numpy as np
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from loguru import logger
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
@@ -34,18 +36,27 @@ from app.database.crud import (
 from app.database.database import get_async_db
 from app.database.models import FraudEvent, PendingTransaction, Transaction, User
 from app.services.ollama_service import OllamaService
+from app.services.liveness.detector import LivenessDetector
+from app.services.liveness.preprocess import LivenessPreprocessor
 from app.services.providers.provider_factory import (
     BiometricInferenceProxy,
-    get_face_verification_provider,
     get_speaker_verification_provider,
 )
 from app.services.whisper_service import WhisperService
 from app.services.email_service import EmailServiceError, send_otp_email
 from app.api.v1.endpoints.auth import get_current_user
 
+try:
+    from geoip2.database import Reader as GeoIPReader
+except ImportError:  # Allows startup before optional deployment data is installed.
+    GeoIPReader = None  # type: ignore[assignment,misc]
+
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
 ollama_service = OllamaService()
+liveness_preprocessor = LivenessPreprocessor()
+liveness_detector = LivenessDetector()
+GEOIP_DATABASE_PATH = Path(__file__).resolve().parents[3] / "core" / "GeoLite2-City.mmdb"
 
 
 class _FasterWhisperProxyAdapter:
@@ -107,6 +118,50 @@ def _otp_digest(otp_code: str) -> str:
         otp_code.encode("utf-8"),
         hashlib.sha256,
     ).hexdigest()
+
+
+def _utc_isoformat(value: datetime) -> str:
+    """Serialize a persisted UTC timestamp with an explicit UTC offset."""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _lookup_geoip_country(client_ip: str) -> str:
+    """Resolve one public IP through the local GeoLite database."""
+    if GeoIPReader is None or not GEOIP_DATABASE_PATH.is_file():
+        logger.bind(database=str(GEOIP_DATABASE_PATH)).warning(
+            "Offline GeoIP database is unavailable; network location is unknown."
+        )
+        return "Unknown"
+    try:
+        with GeoIPReader(str(GEOIP_DATABASE_PATH)) as reader:
+            country = reader.city(client_ip).country.name
+        return country.strip() if country else "Unknown"
+    except Exception as exc:
+        logger.bind(error=str(exc)).warning("Offline GeoIP lookup failed.")
+        return "Unknown"
+
+
+async def _resolve_network_country(request: Request) -> str:
+    """Resolve a safe network country, trusting proxy headers only when enabled."""
+    peer_ip = request.client.host if request.client is not None else ""
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    client_ip = (
+        forwarded_for.split(",", maxsplit=1)[0].strip()
+        if settings.TRUST_PROXY_HEADERS and forwarded_for
+        else peer_ip
+    )
+    if client_ip.casefold() in {"127.0.0.1", "localhost", "::1"}:
+        return "India"
+    try:
+        address = ip_address(client_ip)
+    except ValueError:
+        logger.warning("Incoming client address could not be validated for GeoIP lookup.")
+        return "Unknown"
+    if address.is_loopback or address.is_private:
+        return "India"
+    return await asyncio.to_thread(_lookup_geoip_country, str(address))
 
 
 async def _record_critical_fraud_event(
@@ -190,6 +245,7 @@ class TransactionResponse(BaseModel):
 
 @router.post("/initiate", response_model=TransactionResponse)
 async def initiate_transaction(
+    request: Request,
     audio_file: Annotated[UploadFile, File()],
     db: Annotated[AsyncSession, Depends(get_async_db)],
 ) -> TransactionResponse:
@@ -327,18 +383,28 @@ async def initiate_transaction(
                     "transaction_id": pending.transaction_id,
                     "action": "VOICE_CHALLENGE",
                     "challenge_phrase": challenge_phrase,
-                    "expires_at": pending.expires_at.isoformat(),
+                    "expires_at": _utc_isoformat(pending.expires_at),
                     "rationale": "Transaction amount requires mandatory voice challenge verification.",
                 },
             )
 
+        resolved_country = await _resolve_network_country(request)
         decision = await ollama_service.evaluate_transaction_context(
             amount=extracted_amount,
             speaker_score=speaker_score,
             face_score=0.0,
             liveness_score=0.0,
             is_replay=False,
+            network_country=resolved_country,
         )
+        if resolved_country not in {"India", "Unknown"}:
+            decision = {
+                "risk_tier": "MEDIUM",
+                "explainable_ai_rationale": (
+                    f"Incoming network location resolved to {resolved_country}, which "
+                    "conflicts with the account's India baseline; OTP step-up is required."
+                ),
+            }
         risk_tier = str(decision["risk_tier"])
         rationale = str(decision["explainable_ai_rationale"])
 
@@ -424,7 +490,7 @@ async def initiate_transaction(
                     "transaction_id": pending.transaction_id,
                     "action": "VOICE_CHALLENGE",
                     "challenge_phrase": challenge_phrase,
-                    "expires_at": pending.expires_at.isoformat(),
+                    "expires_at": _utc_isoformat(pending.expires_at),
                     "rationale": rationale,
                 },
             )
@@ -479,7 +545,7 @@ async def initiate_transaction(
                 "transaction_id": pending.transaction_id,
                 "action": "SUBMIT_OTP",
                 "otp_sent_to_email": True,
-                "expires_at": pending.expires_at.isoformat(),
+                "expires_at": _utc_isoformat(pending.expires_at),
                 "rationale": rationale,
             },
         )
@@ -506,7 +572,7 @@ async def verify_transaction(
     photo_file: Annotated[UploadFile | None, File()] = None,
     audio_file: Annotated[UploadFile | None, File()] = None,
 ) -> TransactionResponse:
-    """Consume an active OTP, voice challenge, or biometric challenge exactly once."""
+    """Consume an active OTP or combined voice-and-liveness challenge once."""
     verification_started_at = perf_counter()
     final_face_score = 0.0
     try:
@@ -533,53 +599,48 @@ async def verify_transaction(
             )
             logger.bind(transaction_id=transaction_id).info(f"OTP verification: {verified}")
         
-        # Path 2: Voice Challenge Verification (HIGH risk)
-        elif audio_file is not None:
+        # Path 2: Voice challenge plus facial liveness (HIGH risk)
+        elif pending.status == "PENDING_CHALLENGE":
+            if audio_file is None or photo_file is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "HIGH-risk verification requires both a spoken challenge "
+                        "and a fresh camera image."
+                    ),
+                )
+
             audio_waveform = await async_upload_to_waveform(audio_file)
             transcription = str(await whisper_provider.transcribe(audio_waveform)).strip()
-            
-            # Compare transcription to challenge secret (case-insensitive, fuzzy match)
             expected = pending.verification_secret.lower().strip()
             actual = transcription.lower().strip()
-            
-            # Simple fuzzy matching (can be enhanced with Levenshtein distance)
-            verified = expected in actual or actual in expected
-            
+            voice_verified = bool(actual) and (expected in actual or actual in expected)
+
+            image = await async_upload_to_numpy(photo_file)
+            prepared_frame = await asyncio.to_thread(
+                liveness_preprocessor.prepare_frame,
+                image,
+            )
+            normalized_frame = await asyncio.to_thread(
+                liveness_preprocessor.normalize_intensity,
+                prepared_frame,
+            )
+            liveness_score = await asyncio.to_thread(
+                liveness_detector.analyze_liveness,
+                normalized_frame,
+            )
+            liveness_verified = liveness_score >= settings.LIVENESS_CRITICAL_THRESHOLD
+            verified = voice_verified and liveness_verified
+
             logger.bind(
                 transaction_id=transaction_id,
                 expected=expected,
                 actual=actual,
-                verified=verified
-            ).info("Voice challenge verification completed")
-        
-        # Path 3: Face Verification (alternative to voice)
-        elif photo_file is not None:
-            image = await async_upload_to_numpy(photo_file)
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-            brightness = float(np.mean(gray))
-            liveness_score = min(1.0, sharpness / 150.0) if 25.0 <= brightness <= 230.0 else 0.0
-            if liveness_score >= settings.LIVENESS_CRITICAL_THRESHOLD:
-                user = await db.scalar(select(User).where(User.user_id == pending.user_id))
-                if user is None:
-                    raise HTTPException(status_code=404, detail="User not found.")
-                face_provider = get_face_verification_provider()
-                try:
-                    live_embedding = await face_provider.extract_embedding(image=image)
-                except ValueError as exc:
-                    logger.bind(transaction_id=transaction_id).warning(
-                        "Step-up verification denied because no face was detected."
-                    )
-                    raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="Face verification failed: no face detected.",
-                    ) from exc
-                face_result: Any = await face_provider.verify_face(
-                    enrolled_embedding=user.face_embedding,
-                    live_embedding=live_embedding,
-                )
-                final_face_score = float(face_result.confidence)
-                verified = bool(face_result.verified)
+                voice_verified=voice_verified,
+                liveness_score=round(liveness_score, 4),
+                liveness_verified=liveness_verified,
+                verified=verified,
+            ).info("Combined HIGH-risk verification completed")
 
         if not verified:
             pending.verification_attempts += 1
