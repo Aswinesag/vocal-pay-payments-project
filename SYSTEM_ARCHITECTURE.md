@@ -32,6 +32,31 @@ This is not a soft target. The entire architecture is derived backward from the 
 
 ---
 
+### 1.3 Cloudflare Tunnel Edge Transport
+
+VocalPay may expose its locally hosted FastAPI application through **Cloudflare Tunnel (`cloudflared`)** for remote demonstrations and authentic public-IP risk telemetry. Cloudflare Tunnel is a transport and reverse-proxy boundary only; it is **not** an inference dependency and does not receive stored biometric templates or execute authentication models.
+
+```text
+Remote browser / VPN exit IP
+        -> Cloudflare public HTTPS edge
+        -> encrypted outbound tunnel
+        -> cloudflared connector
+        -> FastAPI at 127.0.0.1:8000
+```
+
+Operational and security invariants:
+
+- The FastAPI origin remains bound locally; no inbound router port-forward is required. `cloudflared` establishes the outbound connection to Cloudflare.
+- Quick Tunnels (`*.trycloudflare.com`) are permitted for engineering demonstrations. A controlled named tunnel and hostname must be used for persistent deployment.
+- `TRUST_PROXY_HEADERS` must be enabled only when requests reach the application through the trusted Cloudflare boundary. The application prioritizes `CF-Connecting-IP`, then the first valid `X-Forwarded-For` address, and otherwise uses the direct socket peer address.
+- Localhost addresses (`127.0.0.1`, `::1`, and `localhost`) resolve to the development home country (`India`).
+- Public IPs are resolved offline through `app/core/GeoLite2-City.mmdb` using `geoip2`; no external geolocation API is permitted in the transaction path.
+- A foreign country is risk telemetry, not proof of fraud. For an otherwise sub-500 transaction it may cause MEDIUM risk and OTP step-up; it must not independently cause a CRITICAL block.
+- Raw audio, images, embeddings, OTPs, and challenge phrases must never be placed in proxy headers, URLs, or Cloudflare logs. All biometric inference remains local.
+- Tunnel loss affects remote reachability only and must not corrupt SQLite-frozen transaction state.
+
+---
+
 ## 2. System Directory Layout & Locked Data Tables
 
 ### 2.1 Locked File Structure
@@ -181,10 +206,10 @@ The fraud-reasoning agent is a stock, locally-hosted **Ollama `Llama-3.2-3B`** m
 |---|---|---|
 | **LOW** | Immediate | Transaction auto-approved and written directly to the `Transaction` ledger. No freeze, no step-up. |
 | **MEDIUM** | Step-up required | `PendingTransaction` frozen with `status = PENDING_OTP`; a 6-digit OTP is emailed and only its keyed HMAC-SHA256 digest is persisted. |
-| **HIGH** | Step-up required | `PendingTransaction` frozen with `status = PENDING_CHALLENGE`; randomized text challenge phrase generated and stored server-side as `verification_secret`. |
+| **HIGH** | Step-up required | `PendingTransaction` frozen with `status = PENDING_CHALLENGE`; a randomized text challenge is stored server-side. Step 2 requires both a matching spoken challenge and a fresh camera frame that passes liveness analysis. |
 | **CRITICAL** | Immediate hard block | Request rejected with HTTP 401 at the DSP gate (Section 3) or post-biometric fraud-reasoning stage; recorded as a `FraudEvent`, never a `Transaction`. |
 
-Risk-tier assignment is produced by the agentic reasoning stage (Section 5.1) evaluating the biometric telemetry (`speaker_score`, `face_score`) from Section 4, except for CRITICAL classifications originating from the Section 3 DSP gate, which bypass the agent entirely.
+Risk-tier assignment is produced by the agentic reasoning stage (Section 5.1) evaluating available biometric and contextual telemetry (`speaker_score`, transaction amount, and offline-resolved network country) from Sections 1.3 and 4, except for CRITICAL classifications originating from the Section 3 DSP gate, which bypass the agent entirely. Face and liveness telemetry are absent from Step 1 and evaluated only when persisted HIGH risk requires them in Step 2.
 
 ### 5.3 Stateless 2-Step API Lifecycle
 
@@ -197,8 +222,9 @@ Ingests one live audio upload. Identity and amount are derived from that voice c
 1. CPU DSP replay gate (Section 3) — CRITICAL short-circuits here.
 2. Faster-Whisper transcription extracts the spoken payment amount.
 3. SpeechBrain extracts the live voiceprint; FAISS selects the best enrolled identity above the configured speaker threshold.
-4. Agentic risk reasoning (Section 5.1) evaluates the amount and real speaker telemetry. Face and liveness scores remain zero because no face model runs during initiation.
-5. Branch on assigned tier:
+4. When Cloudflare Tunnel is used, the trusted proxy boundary supplies the authentic client IP. It is resolved locally with GeoLite2 and the network country is added to the risk context; localhost resolves to India (Section 1.3).
+5. Agentic risk reasoning evaluates the amount, real speaker telemetry, and resolved network country. Face and liveness scores remain zero because no camera or face model runs during initiation.
+6. Branch on assigned tier:
    - **LOW** → write `Transaction`, return success immediately.
    - **MEDIUM / HIGH** → write `PendingTransaction` via `crud.py` with a 5-minute `expires_at` window, then the connection is dropped. The client does not hold an open connection awaiting step-up; it must reconnect for Step 2.
 
@@ -207,7 +233,9 @@ Ingests one live audio upload. Identity and amount are derived from that voice c
 Client submits `transaction_id` plus proof of step-up. Server queries `crud.py` to rehydrate the frozen `PendingTransaction` context. Behavior branches on the persisted `status`:
 
 - **`PENDING_OTP` (MEDIUM):** the submitted OTP is converted to a keyed HMAC-SHA256 digest and compared in constant time with `verification_secret`. No model inference occurs on this path.
-- **`PENDING_CHALLENGE` (HIGH):** a freshly submitted voice clip is transcribed via Faster-Whisper (CUDA, FP16 — Section 4.1) and string-matched against the persisted challenge phrase in `verification_secret`.
+- **`PENDING_CHALLENGE` (HIGH):** the client must submit both a fresh voice clip and a fresh camera image. Faster-Whisper transcribes the voice clip and matches it against the persisted randomized phrase. Independently, `LivenessPreprocessor` standardizes the camera image and the CPU-bound `LivenessDetector` scores it against `LIVENESS_CRITICAL_THRESHOLD`. Authorization uses a strict AND predicate: `voice_verified and liveness_verified`. A missing upload returns HTTP 422; failure of either check rejects the attempt.
+
+The HIGH-risk liveness check provides presentation-attack resistance for the fresh Step 2 frame; it does not replace enrolled-face identity matching and must not be described as equivalent to face recognition. No raw challenge audio or camera image is persisted after request processing.
 
 On successful verification (either path):
 - A `Transaction` row is written to the permanent ledger with `xai_reason` explaining the resolution path.
@@ -227,5 +255,7 @@ Before generating or modifying code in this repository, an agent must confirm th
 4. Does it avoid introducing concurrent GPU model residency (Section 4.2)?
 5. Does it avoid introducing LangChain/CrewAI-class orchestration overhead (Section 5.1)?
 6. Does it preserve the stateless, disk-persisted 2-step lifecycle contract (Section 5.3)?
+7. Does it treat Cloudflare Tunnel as transport only, preserve offline GeoLite resolution, and trust forwarded client-IP headers only at the configured proxy boundary (Section 1.3)?
+8. Does every HIGH-risk completion require both spoken-challenge and CPU-liveness checks to pass (Section 5.3)?
 
 If the answer to any of the above is "no," the proposed change is out of specification and must not be merged without an explicit, recorded architectural decision superseding this document.
